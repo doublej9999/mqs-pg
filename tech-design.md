@@ -2304,4 +2304,210 @@ Batch Manager、重试表调度器与 DLQ、Raw Message 分区留存、Console �
 $env:SPRING_PROFILES_ACTIVE = 'dev'; mvn spring-boot:run
 ```
 
+---
+
+## E.8 阶段六/七/八实现补记（重试调度、原始留存、前端）
+
+### E.8.1 MyBatis-Plus `updateById` 会忽略 null —— 租约清不掉
+
+重试任务的状态迁移最初写成 `task.setLeaseUntil(null); mapper.updateById(task);`。
+测试立刻发现 `lease_until` **仍然有值**。
+
+原因：MyBatis-Plus 的 `updateById` 默认策略是 `FieldStrategy.NOT_NULL`，
+**null 字段不进入 SET 子句**。而「释放租约」的语义恰恰就是写入 NULL。
+
+这不只是显示问题：`reschedule` 把任务置回 `PENDING` 却留着旧租约，
+语义上是一行「没有在跑、却占着租约」的任务，排查时极易误导。
+
+**规则**：凡是需要**显式写入 NULL** 的状态迁移，一律用 `UpdateWrapper`：
+
+```java
+retryTaskMapper.update(null, new LambdaUpdateWrapper<RtRetryTask>()
+        .eq(RtRetryTask::getId, task.getId())
+        .set(RtRetryTask::getStatus, "PENDING")
+        .set(RtRetryTask::getLeaseUntil, null)   // 显式写 NULL
+        .set(RtRetryTask::getUpdatedAt, now));
+```
+
+设计上顺带确立了：`RetryService` 的每个状态迁移都通过一个私有 `transition(id)`
+构造 wrapper，集中在一处，便于审计「哪些字段会被写」。
+
+### E.8.2 DEFAULT 分区会让分区创建**永久**卡死
+
+这是阶段五最值得记录的一个坑，因为它同时是「首次上线必定踩中」的场景。
+
+现象：`raw_message_p20260927`（当天）建不出来，而未来 3 天的分区都建好了。
+
+链路是：
+
+1. 应用刚启动、维护任务还没跑，此时**没有任何日分区**；
+2. 消息到达 → 插入 `raw_message` → PostgreSQL 把它放进 `DEFAULT` 分区兜底（不报错）；
+3. 维护任务开始建当天分区 → 报
+   `updated partition constraint for default partition would be violated`
+   —— 因为 DEFAULT 里已经有落在该区间的行；
+4. 若此时「告警并跳过」，那么**当天分区永远建不出来**：
+   只要 DEFAULT 里那几行不清掉，每次重试都会以同样理由失败。
+
+真正麻烦的是第 4 步的自我强化：分区建不出来 → 新数据继续落 DEFAULT →
+DEFAULT 更不可能清空。首次上线、维护任务未跑、或某天在 00:30 之前就有流量，
+都会进入这个状态。
+
+**解法**（PostgreSQL 官方推荐的搬移流程），整个过程放在一个事务里：
+
+```sql
+ALTER TABLE raw_message DETACH PARTITION raw_message_default;   -- 1. 解除约束
+CREATE TABLE raw_message_p<d> PARTITION OF raw_message FOR VALUES FROM (d) TO (d+1);  -- 2. 建分区
+INSERT INTO raw_message_p<d> SELECT ... FROM raw_message_default WHERE receive_time >= d AND < d+1;  -- 3. 搬数据
+DELETE FROM raw_message_default WHERE receive_time >= d AND < d+1;  -- 4. 清原位
+ALTER TABLE raw_message ATTACH PARTITION raw_message_default DEFAULT;  -- 5. 挂回兜底
+```
+
+代价是 DETACH 会对父表加 `ACCESS EXCLUSIVE` 锁，期间写入短暂阻塞。
+相对于「永久卡死」，这个代价在每日 00:30 的维护窗口里完全可以接受。
+关键是把整段放进事务：中途失败会整体回滚，DEFAULT 不会停留在「已分离」的危险状态。
+
+回归测试 `repairsDefaultPartitionInsteadOfGettingStuck` 除了断言分区被建出来，
+还断言**搬移不丢行**（DEFAULT 归零且新分区里行数为 1）——
+只验证「分区存在」而不验证数据迁移完整，会漏掉搬移过程中 `WHERE` 写错的整类 bug。
+
+### E.8.3 分区过期判定不要依赖 `pg_get_expr` 的文本渲染
+
+`pg_get_expr(relpartbound, oid)` 返回的边界文本是**按服务端时区渲染**的，
+例如 `TO ('2026-09-28 16:00:00+00')`；而「保留线」是用 `now()::date` 在
+**会话时区**里算出来的。两者时区不同，靠正则从文本里抠日期再比较，
+在时区差距大时（如会话 +14 / 服务端 -10）会早删一天。
+
+改为**从分区名解析**：名即 `raw_message_p<yyyyMMdd>`，是建分区时按名义日期写死的，
+与时区渲染无关。
+
+```java
+private static final Pattern PARTITION_NAME = Pattern.compile("^raw_message_p(\\d{8})$");
+```
+
+命名不符合约定的分区一律跳过（可能是人工建的），宁可少删也不误删。
+过期条件也取得保守：只有分区**整个区间**都早于保留线才回收。
+
+### E.8.4 分区边界与会话时区绑定
+
+「今天」取自 `SELECT to_char(now()::date, ...)`，边界字面量按同一会话时区解释，
+二者始终自洽——这一点在实测中被 `pg_get_expr` 印证：
+JDBC 会话（JVM 默认 +08）建出的 `raw_message_p20260928` 边界是
+`2026-09-27 16:00:00+00` ~ `2026-09-28 16:00:00+00`，即本地 09-28 全天。
+
+但 pgjdbc 的会话时区来自 JVM 默认时区，因此**部署之间若改动 JVM 时区**，
+新旧分区的绝对边界会错位，CREATE 会报区间重叠。
+代码在这种情况下记录明确诊断（提示核对时区与边界）而不是抛栈，
+让维护任务能跳过该日期继续处理其它日期。
+
+排查时注意：`psql` 直连的会话时区（本项目容器为 `Etc/UTC`）与应用不同，
+手工执行同样的 `CREATE ... FOR VALUES FROM ('2026-09-27')` 会得到
+`would overlap partition` 的**假报错**——那是 psql 会话把字面量解释成了另一个瞬间。
+
+### E.8.5 留存是旁路：队列满时必须丢弃
+
+`RawStore` 的写入队列是**有界且非阻塞**（`ArrayBlockingQueue.offer`）。
+队列满时直接丢弃并计数告警，绝不阻塞消费线程。
+
+这是刻意的设计取舍：留存的用途是排障参考，而「消息不丢」由 ACK 不变量保证
+（`ack(m) ⟹ PG 已提交 ∨ 重试任务已持久化`），**不依赖留存**。
+反过来，如果这里改成阻塞式入队，一次 PG 写入变慢就会通过队列把消费拖停，
+把「旁路」变成「单点」——那才是真正的可用性事故。
+
+同理，`BatchManager` 在批次入口调用 `rawStore.offerAll(...)` 后不等待、不检查结果。
+留存失败只体现在 `droppedCount` 与日志上。
+
+### E.8.6 旁路写入会污染无关测试
+
+因为 `BatchManager` 现在会写原始留存，所有驱动 `BatchManager` 的测试
+（`PipelineIntegrationTest`、`RouteConsumerIntegrationTest`）都开始往
+`raw_message` 写数据。而它们并没有建分区，于是数据落进 `DEFAULT`，
+进而触发 E.8.2 的建分区死局——表现是**另一个测试类**（`RawRetentionTest`）失败。
+
+这类「测试 A 的副作用让测试 B 失败」的耦合很难从失败信息上看出来。
+处理方式是在不关心留存的测试里显式关闭：
+
+```java
+@TestPropertySource(properties = {
+        "mqs-pg.consumer.auto-start=false",
+        "mqs-pg.raw.enabled=false"     // 旁路，与断言语义无关
+})
+```
+
+另有一个异步测试卫生问题：`RawStore` 的写入在后台线程，只等
+「队列排空」仍可能在 `@AfterEach` 删除数据**之后**才 flush 完成，导致脏数据残留到下一轮。
+正确做法是等写入计数稳定：
+
+```java
+do { last = rawStore.writtenCount(); sleep(100); } while (rawStore.writtenCount() != last);
+```
+
+### E.8.7 DLQ 终态与人工重放的语义
+
+次数耗尽时 `markExhausted` 做两件事：把任务置为 `DLQ`（清租约），
+并写一条 `rt_error_record(is_final=true)`。前者让调度器不再领取，
+后者是 V1 的「DLQ」本体——数据库即队列，控制台可查、可人工重放。
+
+人工重放（`makeDueNow`）对终态任务的处理是**追加一轮额度**：
+`max_attempt = attempt + 配置的 maxAttempt`，同时把状态置回 `PENDING`。
+不重置 `attempt` 是为了保留审计线索（这条消息一共试了多少次）。
+
+重放成功的判定包含一种特殊情况：若重放的消息比库里已有的数据更旧，
+单调守卫会让它 `SKIPPED_OLD_VERSION`。这**算成功**——
+「有更新的数据胜出」正是正确终态，把它当失败会让任务在重试队列里空转。
+
+### E.8.8 阶段六/七/八验证结果
+
+| 验证项 | 结果 |
+| --- | --- |
+| 重放成功 → `SUCCEEDED`，且租约被清空 | 通过（E.8.1 的回归点） |
+| 持续数据错误 → `reschedule` 且递增 `attempt`、释放租约 | 通过 |
+| 次数耗尽 → `DLQ` + `rt_error_record(is_final=true)` | 通过 |
+| 缺配置 → `releaseForRetry`，**不消耗**次数 | 通过 |
+| 重放早于库中数据 → 记为成功而非失败 | 通过 |
+| 租约过期回收 → 任务可被重新领取 | 通过 |
+| `claimDue` 只领取到期且 `PENDING` 的任务 | 通过 |
+| 人工重放 DLQ 任务 → 追加额度并回到 `PENDING` | 通过 |
+| 真实调度器端到端（溢出消息） | 通过：`attempt` 依 1→2→4→8 指数退避增长，最终 10/10 转 `DLQ`，并写出 `retryCount=10` 的终态错误流水 |
+| 分区提前创建幂等 | 通过 |
+| 过期分区 `DETACH + DROP`，保留期内不误删 | 通过 |
+| DEFAULT 数据搬移不丢行 | 通过 |
+| 合法 JSON → `payload(JSONB)`；非法 JSON → `payload_raw` | 通过 |
+| 端到端留存落进正确日分区 | 通过：`tableoid::regclass = raw_message_p20260927`（非 DEFAULT） |
+| 前端构建（`pnpm build`，1691 模块） | 通过 |
+| 前后端联调（Vite 代理 → 后端 6 个接口） | 通过 |
+
+`mvn test`：**37 个用例全部通过**（管线集成 9 + 消费循环 3 + 原始留存 6 +
+重试调度 8 + 折叠 7 + PG Writer 4）。
+
+### E.8.9 前端：pnpm 12 会拦截 postinstall
+
+`pnpm install` 在 pnpm 12 下默认**不执行**依赖的构建脚本，
+`esbuild` 拿不到平台二进制，Vite 随之无法启动。报错是
+`ERR_PNPM_IGNORED_BUILDS`，提示 `pnpm approve-builds`（交互式）。
+
+非交互的做法是写进 `pnpm-workspace.yaml`（pnpm 10+ 已把该设置从
+`package.json` 的 `pnpm` 字段移出，写在 `package.json` 里会被忽略并告警）：
+
+```yaml
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+```
+
+### E.8.10 前端与 vue-admin-template 的对应关系
+
+原项目是 Vue 2 + Element UI + Vuex，本项目按既定选型用 Vue 3 + Element Plus，
+因此只沿用其**组织方式**而非代码：
+
+| vue-admin-template | 本项目 |
+| --- | --- |
+| `src/utils/request.js` 拦截器 | `src/api/request.js`，按 `{success,code,message,data}` 信封解包后直接 resolve `data` |
+| 路由 `meta.title/icon` 驱动侧边栏 | 同，`Sidebar.vue` 从路由表推导菜单结构 |
+| `permission.js` + `store/modules/user` | `router/index.js` 前置守卫 + Pinia `store/user.js` |
+| `layout/` 三件套 | `layout/index.vue` + `Sidebar/Navbar/AppMain` |
+
+控制台未接入鉴权（PRD 未要求），登录页任意非空凭据放行，
+但 token / roles 的位置保留，将来接真实登录只需替换 `userStore.login()`。
+
+
 
