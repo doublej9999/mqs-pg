@@ -1,0 +1,8 @@
+spring:
+  flyway:
+    # dev 额外加载 demo 种子数据（V900__demo_seed.sql）
+    locations: classpath:db/migration,classpath:db/demo
+
+logging:
+  level:
+    com.mqspg: DEBUG

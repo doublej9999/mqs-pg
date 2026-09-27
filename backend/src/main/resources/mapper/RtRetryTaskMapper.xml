@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.mqspg.retry.mapper.RtRetryTaskMapper">
+
+    <!--
+      抢占到期任务。
+      注意：这里是 UPDATE ... RETURNING，用 <select> 声明是刻意为之 ——
+      PostgreSQL JDBC 允许对带 RETURNING 的 UPDATE 调用 executeQuery()，
+      而 MyBatis 的 <select> 正好走这条路径。
+    -->
+    <select id="claimDue" resultType="com.mqspg.retry.entity.RtRetryTask">
+        UPDATE rt_retry_task t
+        SET status      = 'RUNNING',
+            lease_until = now() + make_interval(secs =&gt; #{leaseSeconds}),
+            updated_at  = now()
+        WHERE t.id IN (
+            SELECT id
+            FROM rt_retry_task
+            WHERE status = 'PENDING'
+              AND next_retry_at &lt;= now()
+            ORDER BY next_retry_at
+            LIMIT #{limit}
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING t.id,
+                  t.route_id,
+                  t.config_version,
+                  t.message_id,
+                  t.topic,
+                  t.tag,
+                  t.payload,
+                  t.error_stage,
+                  t.error_code,
+                  t.error_message,
+                  t.attempt,
+                  t.max_attempt,
+                  t.next_retry_at,
+                  t.status,
+                  t.lease_until,
+                  t.last_error_at,
+                  t.created_at,
+                  t.updated_at
+    </select>
+
+    <!-- 租约超时回收：实例崩溃后任务不会永久卡在 RUNNING -->
+    <update id="reclaimExpiredLeases">
+        UPDATE rt_retry_task
+        SET status      = 'PENDING',
+            lease_until = NULL,
+            updated_at  = now()
+        WHERE status = 'RUNNING'
+          AND lease_until IS NOT NULL
+          AND lease_until &lt; now()
+    </update>
+
+</mapper>

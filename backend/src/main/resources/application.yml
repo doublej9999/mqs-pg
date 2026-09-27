@@ -1,0 +1,110 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: mqs-pg
+
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # 配置域 / 运行域 / 留存域所在的 PostgreSQL
+  datasource:
+    # currentSchema 由 pgjdbc 转成连接的 search_path。
+    # 必须显式指定：否则 MyBatis 生成的无限定 SQL（FROM cfg_route）
+    # 会落到 public 而不是 mqs_pg。Flyway 的 default-schema 只管 Flyway 自己。
+    # 默认值面向本地 docker 开发环境；生产用环境变量覆盖，避免把连接串写进仓库
+    url: "${MQS_PG_DB_URL:jdbc:postgresql://localhost:5432/postgres?currentSchema=mqs_pg,public}"
+    username: "${MQS_PG_DB_USER:postgres}"
+    password: "${MQS_PG_DB_PASSWORD:123456}"
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: mqspg-config-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      validation-timeout: 3000
+
+  flyway:
+    enabled: true
+    default-schema: mqs_pg
+    schemas: mqs_pg
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  threads:
+    virtual:
+      enabled: true
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    # 需要看真实 SQL 时改为 org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.mqspg.**.entity
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: mqs-pg
+
+logging:
+  level:
+    root: INFO
+    com.mqspg: DEBUG
+
+# ---------------------------------------------------------------------------
+# 业务侧参数（对应 tech-design §7.1 / §10.4）
+# ---------------------------------------------------------------------------
+mqs-pg:
+  mqs:
+    # 平台 MQS 实现尚未接入；mock 为内存实现，仅用于联调与测试
+    vendor: mock
+  # AES-256-GCM 密钥（Base64，32 字节）。仅当 cfg_datasource.password_enc
+  # 使用 {aes} 前缀时才需要。留空则遇到 {aes} 直接启动失败，避免静默降级。
+  crypto:
+    key: ""
+  batch:
+    # 触发条件：条数或时间先到者为准（PRD §9）
+    size: 1000
+    flush-interval: 1s
+    pull-size: 500
+    # 必须大于预期批处理耗时，否则消息会在处理完成前重新可见、被并发消费
+    invisible-duration: 30s
+    # 单条 MERGE 覆盖的最大行数。切块用于控制 SQL 文本与参数规模，
+    # 同时缩小行级失败的影响面（配合 PgWriter 的二分隔离）
+    write-chunk-size: 200
+  retry:
+    max-attempt: 10
+    initial-delay: 1s
+    multiplier: 2.0
+    max-delay: 60s
+    jitter-ratio: 0.15
+    poll-interval: 1s
+    batch-size: 200
+    lease-duration: 5m
+  raw:
+    enabled: true
+    queue-capacity: 10000
+    worker-count: 2
+    retention-days: 7
+    maintenance-cron: "0 30 0 * * *"
+  pg-health:
+    failure-threshold: 3
+    recovery-threshold: 2
+    probe-interval: 5s
+    probe-timeout: 3s
