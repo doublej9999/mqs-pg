@@ -128,6 +128,58 @@ public class ConsumerManager {
         }
     }
 
+    /**
+     * 停止并移除某路由的消费者。
+     *
+     * <p>{@link RouteConsumer#close()} 只是置一个 volatile 标志，**不会 join 线程**：
+     * 线程要等当前这一轮拉取/写入返回后才退出。因此本方法返回后，
+     * 那个线程可能还会短暂跑一会儿。这是刻意的 —— 强行中断可能打断
+     * 「已提交 PG 但尚未 ACK」的窗口，把一次正常处理变成重复投递。
+     *
+     * @return 是否确实停掉了一个消费者
+     */
+    public synchronized boolean stop(long routeId, String reason) {
+        RouteConsumer existing = consumers.remove(routeId);
+        if (existing == null) {
+            return false;
+        }
+        existing.close();
+
+        // 只有路由还在时才写消费状态。删除路由的场景下监听器也会走到这里，
+        // 而此时 cfg_route 那一行已经没了：状态行既会被级联删除，写它还会撞外键
+        // （insert 一条指向已删路由的 rt_consumer_state）。
+        CfgRoute route = routeMapper.selectById(routeId);
+        if (route != null) {
+            stateRepository.markPaused(routeId, reason,
+                    route.getActiveVersion() == null ? -1 : route.getActiveVersion());
+        } else {
+            log.debug("路由 {} 已不存在，跳过消费状态写入", routeId);
+        }
+        log.info("路由 {} 的 Consumer 已停止: {}", routeId, reason);
+        return true;
+    }
+
+    /**
+     * 重建某路由的消费者（Topic/Tag/目标表变更时使用）。
+     *
+     * <p>必须先停再起：{@code startRoute} 对已存在的路由会直接返回，
+     * 不停掉的话改动不会生效。
+     */
+    public synchronized void restart(long routeId) {
+        CfgRoute route = routeMapper.selectById(routeId);
+        if (route == null) {
+            stop(routeId, "路由已删除");
+            return;
+        }
+        if (!"ACTIVE".equals(route.getStatus()) || route.getActiveVersion() == null) {
+            stop(routeId, "路由已停用");
+            return;
+        }
+        boolean had = stop(routeId, "配置已变更，重建消费者");
+        startRoute(route);
+        log.info("路由 {} 的 Consumer 已重建（此前{}在运行）", routeId, had ? "" : "未");
+    }
+
     public RouteConsumer consumerOf(long routeId) {
         return consumers.get(routeId);
     }

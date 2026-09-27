@@ -2509,5 +2509,231 @@ allowBuilds:
 控制台未接入鉴权（PRD 未要求），登录页任意非空凭据放行，
 但 token / roles 的位置保留，将来接真实登录只需替换 `userStore.login()`。
 
+---
+
+# 附录 F. 阶段九实现补记（页面配置化）
+
+需求原话：「页面上 路由与版本 没有新增删除修改功能。我需要可以在页面上配置化。
+消费 MQS 的哪个 Topic 哪个 Tag 到 某个数据库的，某个 schema 的，某个表中」。
+
+也就是说，配置必须能从控制台端到端完成，而不是靠 SQL。本附录只记录
+**在实现中被实测打出来的问题** —— 它们都不是编译期错误。
+
+## F.1 表单把 `cfg_target` 与 `cfg_route` 合成一步
+
+存储上是两张表（`cfg_target` 描述目标表的物理位置与 Upsert 语义，
+`cfg_route` 描述消费哪个 Topic+Tag），但使用者的心智模型只有一句话：
+「**这个 Topic 的数据写到那张表**」。
+
+所以「新建路由」对话框一次收齐两边字段，提交时先 `POST /targets` 再 `POST /routes`；
+编辑时先 `PUT /targets`（复用原来的 `targetId`）再 `PUT /routes`。
+代价是：若两条路由共用同一张目标表，编辑其中一条会同时改到另一条的目标表定义。
+当前按 1:1 使用（PRD 的场景就是 1:1），页面没有隐藏这一点；
+真出现共用时，`cfg_target` 上的唯一约束仍会拦住重名与同表重复定义。
+
+## F.2 激活后消费者必须自动启动（本需求的核心回归点）
+
+阶段 8 之前，「让新配置生效」的唯一途径是**重启应用**：`ConsumerManager` 只在
+`ApplicationReadyEvent` 时扫描一次 ACTIVE 路由。如果只是把 `cfg_route.active_version`
+改掉就结束，页面上的「设为生效」会表现为**什么都不发生** —— 这是最容易被误判成
+「前端没刷新」的那类问题。
+
+因此把配置变更做成了事务事件（`ConfigChangedEvent`，三种变更：`ROUTE_UPSERTED` /
+`VERSION_ACTIVATED` / `ROUTE_REMOVED`），由 `@TransactionalEventListener(AFTER_COMMIT)`
+的 `ConfigRefreshListener` 在**提交之后**统一处理：
+
+| 变更 | 处理 |
+| --- | --- |
+| `VERSION_ACTIVATED` | 先刷新注册表，再 `ensureStarted(routeId)` |
+| `ROUTE_UPSERTED` | 刷新注册表，再 `restart(routeId)`（Topic/Tag 可能变了，必须重建消费者） |
+| `ROUTE_REMOVED` | 刷新注册表，再 `stop(routeId, ...)` |
+
+两条纪律：
+
+1. **必须在 AFTER_COMMIT，而不是事务内**。事务内消费者可能读到未提交的配置，
+   回滚后就变成「按不存在的配置在消费」。
+2. **必须先刷新注册表再动消费者**，否则 `ensureStarted` 拿到的还是旧快照。
+
+`ConfigAdminService` 自己也绝不碰消费者 —— 写库就是写库，副作用统一交给监听器。
+
+回归点由 `ConfigAdminTest#activateStartsConsumerWithoutRestart` 与端到端脚本第 7 步守着：
+断言 `consumerManager.consumerOf(routeId) != null`，并且刻意设置
+`mqs-pg.consumer.auto-start=false`（关掉启动扫描），
+保证消费者**只可能是被事件拉起来的**。
+
+## F.3 `LambdaUpdateWrapper.set` 会绕过实体上声明的类型处理器
+
+本次最隐蔽的一个：**插入一直是对的，只有更新会炸**。
+
+`cfg_version.content`、`cfg_target.upsert_keys`、`cfg_datasource.pool_config` 都是 JSONB，
+靠 `@TableField(value = "...", typeHandler = JsonbTypeHandler.class)` 绑定。
+`mapper.insert(entity)` 会走这个处理器，但
+
+```java
+mapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
+        .eq(CfgVersion::getId, draft.getId())
+        .set(CfgVersion::getContent, content));   // content 是 Jackson 2 的 JsonNode
+```
+
+不会 —— 它把裸 `JsonNode` 当成 `javaType=Object, jdbcType=null` 的参数交给驱动，
+PostgreSQL 直接拒绝：
+
+```
+PSQLException: 无法推测实例 com.fasterxml.jackson.databind.node.ObjectNode 的 SQL 类型。
+使用 setObject() 时请明确指定要使用的类型。
+```
+
+它之所以能在**单测里漏过去**：测试里 `updateDatasource` 传的 `poolConfig` 恰好是 `null`，
+`.set(字段, null)` 不需要推断类型。而 `updateTarget` 更危险 ——
+`upsertKeys` 永远是非空数组，所以**编辑任何目标表都必然失败**，
+只是当时没有用例走到那条路径。
+
+修法是统一改成「实体 + `updateById`」，让类型处理器生效：
+
+```java
+CfgVersion patch = new CfgVersion();
+patch.setId(draft.getId());
+patch.setContent(content);          // JsonbTypeHandler 生效
+patch.setChangeNote(req.changeNote());
+patch.setStatus("DRAFT");
+versionMapper.updateById(patch);
+```
+
+注意它与 E.8.1 的结论**方向相反**，两条要一起记：
+
+* 要写 **NULL** → 用 `UpdateWrapper` 显式 `set(field, null)`（`updateById` 会跳过 null）；
+* 要写 **JSONB** → 用 `updateById`（`set()` 会绕过类型处理器）。
+
+真正把它打出来的是端到端脚本：`PUT /routes/{id}/draft` 的第二次调用（覆盖既有草稿）
+就报了上面的错。单测随后补齐三条针对性用例
+（`updateDatasourceWritesPoolConfig` / `updateTargetWritesUpsertKeys` / `saveDraftTwiceOverwrites`）。
+
+## F.4 回滚的 `ACTIVATABLE` 漏洞：`INACTIVE` 必须可激活
+
+`ConfigService` 原本把可激活状态限定为 `[VALID, PUBLISHED, ACTIVE]`。
+但版本生命周期是 `DRAFT → VALIDATING → VALID → PUBLISHED → ACTIVE → INACTIVE`，
+一个**曾被激活、随后被新版本取代**的版本会落到 `INACTIVE`。
+而回滚要激活的恰恰就是它 —— 于是「v1 生效 → v2 生效 → 想退回 v1」
+这个**唯一有意义的回滚场景**必然抛 `版本状态不允许激活: INACTIVE`。
+
+`ACTIVATABLE` 补上 `INACTIVE`（`DRAFT` 仍然排除：未发布的草稿没通过校验）。
+这个缺陷是写回滚用例时暴露的，属于「新功能与既有不变量冲突」，
+而不是新代码本身写错。
+
+## F.5 `ROUTE_REMOVED` 的外键陷阱
+
+删除路由后 `cfg_route` 那一行已经不在了，但 `ConfigRefreshListener` 仍会调
+`stop(routeId, "路由已删除")`；而 `stop` 里原本会顺手写一次消费状态：
+
+```
+ERROR: insert or update on table "rt_consumer_state" violates foreign key
+constraint "rt_consumer_state_route_id_fkey"
+```
+
+原因是状态行已被 `ON DELETE CASCADE` 删掉，`selectById` 找不到就走**插入**分支，
+插入一条指向已删除路由的记录。
+
+修法：`stop` 里先确认路由还在，不在就跳过状态写入 —— 那个状态行本来也会被级联删除，
+写它除了撞外键没有任何意义。
+
+## F.6 发布校验为什么不做全量表达式求值
+
+PRD §16 要求「NOT NULL 且无默认值的列必须提供来源」，这可以纯静态判定。
+但表达式（`expression` 字段）是否合法，想彻底验证就得真的求值一次 ——
+而求值需要一条真实消息。
+
+实测结论是：**只能报上下文无关的错误**。`SimpleExpressionEvaluator` 对缺失字段是宽容的
+（`numeric(null) → 0`、`text(null) → ""`），但算术是 `x.divide(y, 18, HALF_UP)`，
+于是拿空对象探测时 `a / b` 会变成 `0/0` 抛 `ArithmeticException` ——
+这是**探针自己造出来的**错误，不是配置错误。
+
+所以 `ConfigValidator` 把表达式诊断分成两档：
+`表达式语法错误 / 未闭合 / 意外的记号 / 末尾有多余内容 / 未知的表达式函数`
+这类**与输入上下文无关**的判 `ERROR`（拦住发布），其余（多半由空探针引起）判 `WARN`。
+宁可漏报也不误报 —— 一个会把正确配置拦在发布门外的校验器，比没有校验器更糟。
+
+## F.7 结构探查：`requiresValue` 是「必须给值」的唯一判据
+
+页面的映射编辑器用 `*` 标出必填列，依据是 `ColumnDto.requiresValue`，
+它等于 `NOT NULL 且无数据库默认值`。第二项必须真的查出来：
+探查 SQL 走的是 `pg_attribute.atthasdef`（列上是否挂了默认值表达式），
+而不是去解析 `information_schema.columns.column_default` 的文本。
+
+少了 `hasDefault` 这一维会怎样：把一个 `DEFAULT now()` 的列误判为必填，
+页面逼着用户为它配映射，用户配了个常量反而**覆盖掉了数据库默认值** ——
+一个纯 UI 的误判，最后变成数据正确性问题。
+
+## F.8 阶段九验证结果
+
+```
+mvn test                     51 个用例全部通过
+                             （新增 ConfigAdminTest 14 个；
+                              原有 PipelineIntegrationTest 9 /
+                              RouteConsumerIntegrationTest 3 / RawRetentionTest 6 /
+                              RetrySchedulerTest 8 / BatchFolderTest 7 / PgWriterTest 4 全绿）
+pnpm build                   exit 0
+scripts/e2e-config-api.ps1   全部断言通过（40+ 条）
+```
+
+端到端脚本走过的路径（对应页面上的操作）：
+
+| 脚本步骤 | 页面操作 | 断言要点 |
+| --- | --- | --- |
+| 1 数据源增删查 + 试连 + 探查 | 数据源页「新建 / 测试连接」 | 响应不含 `password`；`requiresValue`、`primaryKey`、`suggestedTransform` 正确 |
+| 2 目标表 | 新建路由对话框里的库 / schema / 表 | 目标表指向 `biz_demo.e2e_orders` |
+| 3 路由 | 「新建路由」 | 新建为 `INACTIVE`、无生效版本、无消费者；同 Topic+Tag 被拒 |
+| 4–6 草稿 / 校验 / 发布 | 「配置」→ 保存草稿 → 发布 | 漏掉 `NOT NULL` 列被拦下且**指明是哪一列**；被拦下后版本仍是 `DRAFT` |
+| 7 激活 | 「版本」→「设为生效」 | **消费者自动启动**，且未暂停 |
+| 8 投递 → 落库 | 「模拟投递」 | 枚举 `PAID→2`、时间戳按 `Asia/Shanghai`、常量、JSONPath 全部正确；ACK 完成，无未 ACK |
+| 9 删除保护 | 「删除」 | 被引用的数据源 / 目标表拒绝删除，并说明是谁在引用 |
+| 10 删除路由 | 「删除」 | 路由与其消费状态一起消失（级联） |
+
+另外单独验证了**未改动的消费主路径**没有回归：向 demo 路由
+（`order-topic` / `order.updated` → `biz_demo.orders`）投递一条消息，
+落库值与转换结果均正确，`received=1 acked=1 notAcked=0`。
+
+## F.9 页面与 API 的对应关系
+
+| 页面 / 操作 | API |
+| --- | --- |
+| 数据源列表 / 新建 / 编辑 / 删除 | `GET,POST /api/datasources`、`PUT,DELETE /api/datasources/{id}` |
+| 试连（保存前，密码留空则回落已保存值） | `POST /api/datasources/test?id=` |
+| 试连（已保存配置） | `POST /api/datasources/{id}/test` |
+| schema / 表 / 列下拉框 | `GET /api/datasources/{id}/schemas[/{s}/tables[/{t}/columns]]` |
+| 新建 / 编辑路由（含目标表） | `POST,PUT /api/routes[/{id}]` + `POST,PUT /api/targets[/{id}]` |
+| 删除路由 | `DELETE /api/routes/{id}[?force=true]` |
+| 映射编辑器读 / 写 | `GET,PUT /api/routes/{id}/draft` |
+| 「按同名列自动生成」 | `POST /api/routes/{id}/draft/auto-generate` |
+| 新建版本 / 校验 / 发布 / 删除 | `POST /versions`、`GET /versions/{v}/validate`、`POST /versions/{v}/publish`、`DELETE /versions/{v}` |
+| 设为生效 / 回滚 | `POST /versions/{v}/activate`、`POST /rollback` |
+
+两条接口设计上的选择：
+
+* **`publish` 校验不通过时返回 `{valid:false, issues:[...]}` 而不是抛异常**。
+  它不是「调用出错」，而是「校验结果不通过」，页面需要拿到完整问题清单逐条修，
+  用 400 + 一句 message 表达不了。
+* **草稿可以不存在**。`GET /draft` 在没有草稿时基于 ACTIVE 版本合成一份**未持久化**的
+  编辑视图（`persisted=false`），页面因此永远有东西可编辑，不必先 POST 一次造草稿。
+* **删除是「默认拦、显式放行」**。数据源被目标表引用、目标表被路由引用时直接拒绝并说明
+  是谁在引用；路由还有未完成的 `rt_retry_task` 时也拒绝，必须显式 `?force=true`。
+  重试与错误历史**不跟着级联删除**（它们没有外键，是审计记录）。
+
+## F.10 前端实现中的两个自伤
+
+都是「页面看起来在工作，实际上悄悄改坏了别的字段」这一类：
+
+1. **保存草稿时会重置 `mappingStrategy` / `jslt`**。映射编辑器只编辑 `mappings`，
+   最初实现把整个 `content` 按前端认知重建，于是后端里配好的
+   `CAMEL_TO_SNAKE` 或一段 JSLT 会在用户点一次「保存草稿」后被抹成默认值。
+   修法：`mappingStrategy` / `jslt` 随草稿一起读出、原样带回。
+2. **保存草稿会顺手弹出「版本」抽屉**。刷新版本列表复用了 `openVersions()`，
+   而它会把抽屉打开；结果在映射编辑器里点「保存草稿」会叠出一个抽屉。
+   修法：拆出只拉数据的 `reloadVersions()`，`openVersions()` 才负责打开抽屉。
+
+另外原页面有若干**字段名对不上 DTO** 的死列（`routeId` / `targetSchema` / `remark`，
+而 DTO 是 `id` / `targetTable` / `changeNote`），一直渲染为空且不会报错 ——
+本次改造一并修正。
+
+
 
 

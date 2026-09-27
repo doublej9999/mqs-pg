@@ -1,5 +1,6 @@
 package com.mqspg.common.crypto;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -23,6 +24,7 @@ import java.util.Base64;
  * <p>刻意要求**显式前缀**：没有前缀直接抛错，避免「以为加了密其实存了明文」
  * 或反之的静默错误。
  */
+@Slf4j
 @Component
 public class PasswordCodec {
 
@@ -53,6 +55,29 @@ public class PasswordCodec {
         }
         throw new IllegalArgumentException(
                 "密码缺少 {noop} 或 {aes} 前缀，拒绝按明文使用");
+    }
+
+    /** 是否配置了加密密钥。未配置时只能以 {@code {noop}} 明文存储。 */
+    public boolean canEncrypt() {
+        return key != null;
+    }
+
+    /**
+     * 编码明文密码：配置了密钥用 {@code {aes}}，否则回落 {@code {noop}}。
+     *
+     * <p>这里打 warn 而不抛错，是因为本地开发不该被迫先生成一把密钥。
+     * 但每次写入都会留下日志痕迹 —— 生产环境误用是可以被发现的，
+     * 而如果直接抛错，开发者多半会去关掉整个功能而不是配上密钥。
+     */
+    public String encode(String plain) {
+        if (plain == null) {
+            return null;
+        }
+        if (key == null) {
+            log.warn("未配置 mqs-pg.crypto.key，数据源密码将以 {{noop}} 明文存储 —— 仅限本地/开发环境");
+            return NOOP + plain;
+        }
+        return encodeAes(plain);
     }
 
     /** 编码为 {@code {aes}...}，供运维工具生成。 */

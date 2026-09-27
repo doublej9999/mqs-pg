@@ -41,8 +41,17 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ConfigService {
 
-    /** 允许被激活的版本状态。 */
-    private static final List<String> ACTIVATABLE = List.of("VALID", "PUBLISHED", "ACTIVE");
+    /**
+     * 允许被激活的版本状态。
+     *
+     * <p>必须包含 {@code INACTIVE}：一个曾被激活、随后被新版本取代的版本会被降级为
+     * INACTIVE，而**回滚要激活的恰恰就是它**。若把它排除在外，回滚在
+     * 「v1 生效 → v2 生效 → 想退回 v1」这个唯一有意义的场景下必然失败。
+     *
+     * <p>{@code DRAFT} 不在其中：未发布的草稿还没通过校验，不允许直接生效。
+     */
+    private static final List<String> ACTIVATABLE =
+            List.of("VALID", "PUBLISHED", "ACTIVE", "INACTIVE");
 
     private final CfgRouteMapper routeMapper;
     private final CfgTargetMapper targetMapper;
@@ -168,7 +177,7 @@ public class ConfigService {
 
         // 注册表刷新必须发生在事务提交之后：否则消费线程可能读到尚未提交
         // （甚至最终回滚）的配置。由 AFTER_COMMIT 监听器完成，见 ConfigRefreshListener。
-        events.publishEvent(new ConfigChangedEvent(routeId));
+        events.publishEvent(ConfigChangedEvent.versionActivated(routeId));
 
         log.info("路由 {} 已激活配置版本 {}（原版本 {}）", routeId, version, previous);
     }

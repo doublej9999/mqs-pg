@@ -114,9 +114,17 @@ Vite 已把 `/api` 代理到 `http://localhost:8080`，因此不必处理跨域�
 > 仓库里的 `frontend/pnpm-workspace.yaml` 已把 `esbuild`、`vue-demi` 加入
 > `allowBuilds`；若换成 npm/yarn 则无此问题。
 
-页面：运行总览、路由与版本、重试队列（可人工重放 / 取消）、错误与 DLQ、原始留存、模拟投递。
+页面：运行总览、路由与版本、数据源、重试队列（可人工重放 / 取消）、错误与 DLQ、原始留存、模拟投递。
+
+「路由与版本」页已经能完成**整条链路的配置**：新建路由时依次选「数据源 → schema → 表 →
+Upsert Key → 单调守卫字段」，下拉框内容全部来自目标库的真实结构（不是手填标识符）；
+随后编辑字段映射（或点「按同名列自动生成」）→ 发布 → 设为生效。
+发布前会静态校验 NOT NULL 列是否都有来源、Upsert Key 是否命中唯一索引；
+校验不通过会列出**具体是哪一列**，而不是笼统报错。
 
 ### 6. 测试
+
+后端单测 / 集成测试：
 
 ```bash
 cd backend
@@ -124,12 +132,24 @@ mvn test
 ```
 
 集成测试（`PgWriterTest` / `PipelineIntegrationTest` / `RouteConsumerIntegrationTest` /
-`RetrySchedulerTest` / `RawRetentionTest`）依赖本地 PostgreSQL 与 dev 种子数据；
-后续会迁移到 Testcontainers。它们都设置 `mqs-pg.consumer.auto-start=false`，
+`RetrySchedulerTest` / `RawRetentionTest` / `ConfigAdminTest`）依赖本地 PostgreSQL 与
+dev 种子数据；后续会迁移到 Testcontainers。它们都设置 `mqs-pg.consumer.auto-start=false`，
 避免后台消费线程与测试争抢同一批消息。
 
 其中驱动 `BatchManager` 的两个测试额外设置 `mqs-pg.raw.enabled=false`：
 原始留存是**旁路**，开着会往 `raw_message` 写数据，与这两个测试的断言无关。
+
+端到端验收（需要后端已启动）：
+
+```powershell
+pwsh -File scripts/e2e-config-api.ps1     # Windows PowerShell 5.1 亦可
+```
+
+这个脚本只用页面真正会调的接口，从「建数据源」一路走到「消息落库」，
+自带建表与清理，可反复运行。它覆盖的正是**配置化闭环**：
+新建数据源 → 试连 → 探查 schema/表/列 → 建目标表 → 建路由 → 存草稿 →
+校验被拦下 → 发布 → 激活 → 投递 → 落库（含枚举 / 时间戳 / 常量 / JSONPath 四种转换）→ ACK →
+删除保护 → 级联清理。
 
 ---
 
@@ -161,6 +181,8 @@ mqs-pg/
 │       │       ├── db/demo/      # Flyway：dev 种子数据
 │       │       └── mapper/       # MyBatis XML
 │       └── test/java/com/mqspg/
+├── scripts/
+│   └── e2e-config-api.ps1        # 配置化闭环的端到端验收（自带建表与清理）
 └── frontend/                     # Vue 3 + Vite + Element Plus 控制台
     ├── package.json
     ├── pnpm-workspace.yaml       # pnpm 12 构建脚本白名单
@@ -171,12 +193,12 @@ mqs-pg/
         ├── store/                # Pinia 用户态
         ├── layout/               # 侧边栏 / 顶栏 / 内容区
         ├── styles/
-        └── views/                # dashboard、routes、retry、errors、raw、mock、login
+        └── views/                # dashboard、routes、datasources、retry、errors、raw、mock、login
 ```
 
 ---
 
-## 实现须知：六个已踩过的坑
+## 实现须知：七个已踩过的坑
 
 这几条都不会在**编译期**报错，而是以「静默不生效」或「运行时才炸」的形式出现。
 完整说明见 tech-design.md 附录 E。
@@ -212,6 +234,15 @@ mqs-pg/
    正确做法是在一个事务里 `DETACH DEFAULT → 建分区 → 搬数据 → ATTACH 回来`，
    见 `RawPartitionMaintenance#repairAndCreate`。
 
+7. **`LambdaUpdateWrapper.set(字段, jsonNode)` 会绕过实体上声明的类型处理器**。
+   `content` / `upsert_keys` / `pool_config` 都是 JSONB 列，靠 `@TableField(typeHandler = JsonbTypeHandler.class)`
+   才能正确绑定；`set()` 把裸 `JsonNode` 直接交给 JDBC 驱动，PostgreSQL 无法推断其
+   SQL 类型，运行时报「无法推测实例 `ObjectNode` 的 SQL 类型」。
+   凡是这些字段的更新都要用**实体 + `updateById`**（`insert` 一直是对的，所以只有更新路径会炸）。
+   注意它与第 5 条正好相反：第 5 条是 `updateById` 跳过 null 让人吃亏，
+   这里则是必须借它的类型处理器 —— 所以**要写 NULL 用 `UpdateWrapper`，
+   要写 JSONB 用 `updateById`**。
+
 另有一条**实现红线**：`MergeSqlBuilder` 中只允许存在**带单调守卫**的
 `WHEN MATCHED`，绝不能补一个无守卫的兜底子句——那会让旧版本数据覆盖新数据，
 且 PostgreSQL 官方文档中 MERGE 的示例恰好就是这个反例，不可照抄。
@@ -231,8 +262,11 @@ mqs-pg/
 | 6 重试表调度器（指数退避 + 租约）+ DLQ 重放 | ✅ |
 | 7 Raw Message 分区留存 + TTL 维护 | ✅ |
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
+| 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
 
-阶段 0–7 的验证结果见 tech-design.md 附录 E。当前 `mvn test`：**37 个用例全部通过**。
+阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
+当前 `mvn test`：**51 个用例全部通过**（其中 14 个是阶段 9 新增的配置域写操作测试），
+`scripts/e2e-config-api.ps1` 端到端断言全部通过。
 
 ### 仍待接入的部分
 
@@ -240,3 +274,9 @@ mqs-pg/
   （`MockMqsBroker`）。接入真实平台时新增一个实现类即可，消费循环、重试、留存均无需改动。
 * **控制台鉴权**。REST API 目前无认证，前端只保留了 token / 角色的结构位置。
 * **集成测试容器化**。当前测试直连本地 PostgreSQL，计划迁移到 Testcontainers。
+* **发布前的试运行（Dry Run）**。目前发布只做静态校验（列覆盖、唯一索引、表达式可解析），
+  不会真拿一条样本消息试写一次；`POST /routes/{id}/draft/preview` 的位置已经留好。
+* **Topic 仍是自由输入**。`MockMqsBroker` 无法枚举 Topic，平台 MQS 的枚举接口也还没接，
+  所以这一项没法做成下拉框；接好平台实现后可无缝换成下拉。
+* **界面化的 JSLT 编辑器**。映射编辑器目前只覆盖 `mappings`，
+  `jslt` 与 `mappingStrategy` 会原样保留但需要在库里或脚本里改。

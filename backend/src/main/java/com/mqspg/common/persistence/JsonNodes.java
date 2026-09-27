@@ -32,6 +32,20 @@ public final class JsonNodes {
         return MAPPER.convertValue(node, Object.class);
     }
 
+    /**
+     * 纯 Java 结构 → Jackson 2 JsonNode。
+     *
+     * <p>与 {@link #toPlain} 方向相反，用于把 Web 层（Jackson 3）反序列化出来的
+     * Map / List 写回 JSONB 列。请求 DTO 同样不能声明 {@code JsonNode}：
+     * Jackson 3 不认识 Jackson 2 的类型，反序列化会失败。
+     */
+    public static JsonNode toJsonNode(Object plain) {
+        if (plain == null) {
+            return null;
+        }
+        return MAPPER.valueToTree(plain);
+    }
+
     /** 取文本字段；缺失或为 null 时返回 {@code null}。 */
     public static String text(JsonNode node, String field) {
         if (node == null) {

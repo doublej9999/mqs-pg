@@ -56,6 +56,20 @@ public class RouteConfigAssembler {
                 parseMappings(content.get("mappings")));
     }
 
+    /**
+     * 解析快照中的映射列表。
+     *
+     * <p>公开出来是给**发布校验**用的：草稿还没有对应的 {@code CfgVersion} 行，
+     * 无法走 {@link #assemble}，但校验又必须看到解析后的 {@link MappingDef}。
+     * 与其在校验器里再写一份解析逻辑，不如共用这一处 —— 内容格式只在这一个类里定义。
+     */
+    public List<MappingDef> mappings(JsonNode content) {
+        if (content == null || content.isNull()) {
+            return List.of();
+        }
+        return parseMappings(content.get("mappings"));
+    }
+
     // ------------------------------------------------------------------
 
     private List<MappingDef> parseMappings(JsonNode array) {

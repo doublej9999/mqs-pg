@@ -36,7 +36,8 @@ public class TargetMetadataReader {
     private static final String COLUMNS_SQL = """
             SELECT a.attname AS column_name,
                    format_type(a.atttypid, a.atttypmod) AS data_type,
-                   NOT a.attnotnull AS nullable
+                   NOT a.attnotnull AS nullable,
+                   a.atthasdef AS has_default
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -85,7 +86,8 @@ public class TargetMetadataReader {
                 (rs, i) -> new ColumnMeta(
                         rs.getString("column_name"),
                         rs.getString("data_type"),
-                        rs.getBoolean("nullable")),
+                        rs.getBoolean("nullable"),
+                        rs.getBoolean("has_default")),
                 ref.schema(), ref.table());
 
         if (columns.isEmpty()) {

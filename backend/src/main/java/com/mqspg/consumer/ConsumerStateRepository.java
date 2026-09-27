@@ -1,5 +1,7 @@
 package com.mqspg.consumer;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.config.entity.RtConsumerState;
 import com.mqspg.config.mapper.RtConsumerStateMapper;
 import lombok.RequiredArgsConstructor;
@@ -81,13 +83,18 @@ public class ConsumerStateRepository {
             mapper.insert(s);
             return;
         }
-        existing.setStatus(status);
-        existing.setReason(reason);
-        existing.setBindVersion(bindVersion);
-        existing.setUpdatedAt(now);
+        // 显式 set(null)：updateById 默认忽略 null 字段（FieldStrategy.NOT_NULL），
+        // 会让「恢复运行」后仍挂着上一次的暂停原因 —— 页面上就会出现
+        // 状态 RUNNING 却写着「路由已停用」的自相矛盾。
+        LambdaUpdateWrapper<RtConsumerState> w = Wrappers.<RtConsumerState>lambdaUpdate()
+                .eq(RtConsumerState::getRouteId, routeId)
+                .set(RtConsumerState::getStatus, status)
+                .set(RtConsumerState::getReason, reason)
+                .set(RtConsumerState::getBindVersion, bindVersion)
+                .set(RtConsumerState::getUpdatedAt, now);
         if (isError) {
-            existing.setLastErrorAt(now);
+            w.set(RtConsumerState::getLastErrorAt, now);
         }
-        mapper.updateById(existing);
+        mapper.update(null, w);
     }
 }

@@ -118,6 +118,28 @@ body {
   color: #909399;
 }
 
+/* 表单内联提示：解释字段用途，比 placeholder 更持久（输入后不消失） */
+.form-hint {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+/* 校验问题清单 */
+.issue-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.issue-list .issue-field {
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  color: #606266;
+  margin-right: 6px;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

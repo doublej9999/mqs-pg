@@ -39,6 +39,12 @@ export const routes = [
         name: 'Routes',
         component: () => import('@/views/routes/index.vue'),
         meta: { title: '路由与版本', icon: 'Guide' }
+      },
+      {
+        path: 'datasources',
+        name: 'Datasources',
+        component: () => import('@/views/datasources/index.vue'),
+        meta: { title: '数据源', icon: 'Coin' }
       }
     ]
   },
