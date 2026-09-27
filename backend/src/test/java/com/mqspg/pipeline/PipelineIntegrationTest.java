@@ -43,7 +43,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @SpringBootTest
 @ActiveProfiles("dev")
-@TestPropertySource(properties = "mqs-pg.consumer.auto-start=false")
+// 关掉原始留存：它经由 BatchManager 的旁路写入，与这里的断言无关，
+// 而且会把消息写进 raw_message（无分区时落到 DEFAULT，影响其它测试）。
+@TestPropertySource(properties = {
+        "mqs-pg.consumer.auto-start=false",
+        "mqs-pg.raw.enabled=false"
+})
 @DisplayName("端到端管线")
 class PipelineIntegrationTest {
 

@@ -8,6 +8,7 @@ import com.mqspg.common.model.TargetRow;
 import com.mqspg.config.registry.ConfigRegistry;
 import com.mqspg.consumer.PgHealthGate;
 import com.mqspg.mqs.spi.MqsMessage;
+import com.mqspg.raw.RawStore;
 import com.mqspg.retry.RetryService;
 import com.mqspg.transform.TransformEngine;
 import com.mqspg.writer.MergeResult;
@@ -49,6 +50,7 @@ public class BatchManager {
     private final PgWriter writer;
     private final RetryService retryService;
     private final PgHealthGate healthGate;
+    private final RawStore rawStore;
 
     /**
      * @param routeId 路由
@@ -58,6 +60,10 @@ public class BatchManager {
         if (batch.isEmpty()) {
             return BatchResult.ok(List.of());
         }
+
+        // 原始留存：非阻塞旁路，放在最前面 —— 即便后面写入失败、
+        // 甚至这条消息最终进了 DLQ，原文也已经留下了（PRD §29/§30）。
+        rawStore.offerAll(routeId, batch);
 
         // 按绑定版本分组：配置发布切换的瞬间，同一批次里可能混有两个版本的消息。
         // 每条消息必须用它自己接收时刻的版本处理（PRD §18/§19）。

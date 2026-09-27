@@ -99,10 +99,17 @@ mqs-pg:
     lease-duration: 5m
   raw:
     enabled: true
+    # 留存是旁路：队列满时丢弃并告警，绝不阻塞消费主链路
     queue-capacity: 10000
     worker-count: 2
     retention-days: 7
     maintenance-cron: "0 30 0 * * *"
+    # 提前创建未来几天的分区，避免新的一天开头写入落到 DEFAULT 分区
+    ahead-days: 3
+    batch-size: 200
+    flush-interval: 500ms
+    # 置 false 时只告警不删，用于灰度观察
+    drop-expired: true
   pg-health:
     failure-threshold: 3
     recovery-threshold: 2

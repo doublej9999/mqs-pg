@@ -38,6 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("dev")
 @TestPropertySource(properties = {
         "mqs-pg.consumer.auto-start=false",
+        // 原始留存是旁路，与消费循环断言无关；开着会往 raw_message 写数据
+        "mqs-pg.raw.enabled=false",
         "mqs-pg.batch.size=3",
         "mqs-pg.batch.flush-interval=200ms",
         "mqs-pg.batch.pull-size=10"
