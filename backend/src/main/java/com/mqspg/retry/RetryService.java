@@ -1,6 +1,7 @@
 package com.mqspg.retry;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ErrorSeverity;
@@ -16,7 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 重试任务的持久化（ADR-02）。
@@ -240,6 +243,31 @@ public class RetryService {
                 .eq(status != null && !status.isBlank(), RtRetryTask::getStatus, status)
                 .orderByAsc(RtRetryTask::getNextRetryAt)
                 .last("LIMIT " + Math.max(1, Math.min(limit, 500))));
+    }
+
+    /**
+     * 按状态汇总，供控制台概览。
+     *
+     * <p>固定输出全部状态（计数为 0 也要出现）：前端据此渲染固定的状态卡片，
+     * 缺键会让页面出现「有时少一个标签」的闪烁。
+     */
+    public Map<String, Object> summary() {
+        List<Map<String, Object>> rows = retryTaskMapper.selectMaps(
+                new QueryWrapper<RtRetryTask>()
+                        .select("status", "count(*) as cnt")
+                        .groupBy("status"));
+
+        Map<String, Object> counts = new LinkedHashMap<>();
+        for (String s : List.of("PENDING", "RUNNING", "SUCCEEDED", "DLQ", "CANCELLED")) {
+            counts.put(s, 0L);
+        }
+        for (Map<String, Object> row : rows) {
+            Object status = row.get("status");
+            if (status != null) {
+                counts.put(String.valueOf(status), row.get("cnt"));
+            }
+        }
+        return counts;
     }
 
     private static String truncate(String s) {

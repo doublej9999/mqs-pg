@@ -12,8 +12,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -43,32 +43,22 @@ public class RetryController {
     /** 按状态汇总，用于控制台概览。 */
     @GetMapping("/summary")
     public ApiResponse<Map<String, Object>> summary() {
-        List<Map<String, Object>> rows = retryTaskMapper.selectMaps(
-                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<RtRetryTask>()
-                        .select("status", "count(*) as cnt")
-                        .groupBy("status"));
-
-        Map<String, Object> counts = new LinkedHashMap<>();
-        for (String s : List.of("PENDING", "RUNNING", "SUCCEEDED", "DLQ", "CANCELLED")) {
-            counts.put(s, 0L);
-        }
-        for (Map<String, Object> row : rows) {
-            Object status = row.get("status");
-            Object cnt = row.get("cnt");
-            if (status != null) {
-                counts.put(String.valueOf(status), cnt);
-            }
-        }
-        return ApiResponse.ok(counts);
+        return ApiResponse.ok(retryService.summary());
     }
 
+    /**
+     * 单条详情。
+     *
+     * <p>与列表 DTO 的区别是**带上 payload**：列表刻意不带（原始报文会让响应体
+     * 膨胀几个数量级），而看单条时运维往往正需要原文来判断为什么失败。
+     */
     @GetMapping("/{id}")
-    public ApiResponse<RetryTaskDto> get(@PathVariable long id) {
+    public ApiResponse<RetryTaskDetailDto> get(@PathVariable long id) {
         RtRetryTask task = retryTaskMapper.selectById(id);
         if (task == null) {
             return ApiResponse.fail("NOT_FOUND", "重试任务不存在: " + id);
         }
-        return ApiResponse.ok(RetryTaskDto.of(task));
+        return ApiResponse.ok(RetryTaskDetailDto.of(task));
     }
 
     /**
@@ -127,6 +117,39 @@ public class RetryController {
                     t.getTopic(), t.getTag(), t.getErrorStage(), t.getErrorCode(),
                     t.getErrorMessage(), t.getAttempt(), t.getMaxAttempt(), t.getStatus(),
                     t.getNextRetryAt(), t.getLastErrorAt(), t.getCreatedAt());
+        }
+    }
+
+    /** 单条详情：在列表字段之上补充原始报文与租约信息。 */
+    public record RetryTaskDetailDto(
+            Long id,
+            Long routeId,
+            Integer configVersion,
+            String messageId,
+            String topic,
+            String tag,
+            String errorStage,
+            String errorCode,
+            String errorMessage,
+            Integer attempt,
+            Integer maxAttempt,
+            String status,
+            OffsetDateTime nextRetryAt,
+            OffsetDateTime leaseUntil,
+            OffsetDateTime lastErrorAt,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt,
+            String payload) {
+
+        static RetryTaskDetailDto of(RtRetryTask t) {
+            return new RetryTaskDetailDto(
+                    t.getId(), t.getRouteId(), t.getConfigVersion(), t.getMessageId(),
+                    t.getTopic(), t.getTag(), t.getErrorStage(), t.getErrorCode(),
+                    t.getErrorMessage(), t.getAttempt(), t.getMaxAttempt(), t.getStatus(),
+                    t.getNextRetryAt(), t.getLeaseUntil(), t.getLastErrorAt(),
+                    t.getCreatedAt(), t.getUpdatedAt(),
+                    // payload 以文本形式返回：前端要展示的是原文，byte[] 会被序列化成数字数组
+                    t.getPayload() == null ? null : new String(t.getPayload(), StandardCharsets.UTF_8));
         }
     }
 }

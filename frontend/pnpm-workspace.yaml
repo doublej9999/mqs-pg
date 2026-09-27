@@ -1,0 +1,5 @@
+# pnpm 12 生成的构建脚本白名单模板。esbuild 需要 postinstall 落平台二进制，
+# 否则 vite 无法启动；vue-demi 用于在 Vue 2/3 间切换导出。
+allowBuilds:
+  esbuild: true
+  vue-demi: true
