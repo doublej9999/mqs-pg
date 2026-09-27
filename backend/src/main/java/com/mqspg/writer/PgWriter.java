@@ -19,10 +19,8 @@ import org.springframework.stereotype.Component;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * PostgreSQL 批量写入器（tech-design §9）。
@@ -57,9 +55,9 @@ public class PgWriter {
 
     public MergeResult write(RouteConfig cfg, List<FoldedRecord> folded) {
         Map<KeyTuple, MergeAction> actions = new LinkedHashMap<>();
-        Set<KeyTuple> failed = new LinkedHashSet<>();
+        Map<KeyTuple, String> failures = new LinkedHashMap<>();
         if (folded.isEmpty()) {
-            return MergeResult.ok(actions, failed);
+            return MergeResult.ok(actions, failures);
         }
 
         TargetTableMeta meta = metadataReader.get(cfg.target());
@@ -73,16 +71,15 @@ public class PgWriter {
                 if (!isDataLevel(e)) {
                     log.error("PG 级写入故障，中止本批次: target={} sqlState={}",
                             cfg.target().qualifiedTable(), sqlState(e), e);
-                    return MergeResult.aborted(e, actions, failed);
+                    return MergeResult.aborted(e, actions, failures);
                 }
                 log.warn("语句级写入失败，进入二分隔离: target={} 行数={} sqlState={} reason={}",
-                        cfg.target().qualifiedTable(), chunk.size(), sqlState(e),
-                        rootMessage(e));
+                        cfg.target().qualifiedTable(), chunk.size(), sqlState(e), rootMessage(e));
                 try {
-                    isolate(cfg, meta, chunk, actions, failed);
+                    isolate(cfg, meta, chunk, actions, failures, e);
                 } catch (DataAccessException e2) {
                     log.error("隔离过程中出现 PG 级故障，中止本批次: sqlState={}", sqlState(e2), e2);
-                    return MergeResult.aborted(e2, actions, failed);
+                    return MergeResult.aborted(e2, actions, failures);
                 }
             }
         }
@@ -90,11 +87,11 @@ public class PgWriter {
         // 未出现在 RETURNING 中的键 = 被单调守卫跳过的旧版本。
         // 依赖 PG 的官方语义：没有任何子句命中时该候选行不产生动作。
         for (FoldedRecord f : folded) {
-            if (!actions.containsKey(f.key()) && !failed.contains(f.key())) {
+            if (!actions.containsKey(f.key()) && !failures.containsKey(f.key())) {
                 actions.put(f.key(), MergeAction.SKIPPED_OLD_VERSION);
             }
         }
-        return MergeResult.ok(actions, failed);
+        return MergeResult.ok(actions, failures);
     }
 
     // ------------------------------------------------------------------
@@ -130,12 +127,13 @@ public class PgWriter {
      * 它能保证坏行不阻塞同批次的好行（PRD §49）。
      */
     private void isolate(RouteConfig cfg, TargetTableMeta meta, List<FoldedRecord> chunk,
-                         Map<KeyTuple, MergeAction> actions, Set<KeyTuple> failed) {
+                         Map<KeyTuple, MergeAction> actions, Map<KeyTuple, String> failures,
+                         DataAccessException cause) {
         if (chunk.size() == 1) {
             FoldedRecord f = chunk.get(0);
-            failed.add(f.key());
-            log.warn("行级写入失败（已隔离，将进入重试）: target={} key={} 关联消息数={}",
-                    cfg.target().qualifiedTable(), f.key(), f.sources().size());
+            failures.put(f.key(), "SQLSTATE %s: %s".formatted(sqlState(cause), rootMessage(cause)));
+            log.warn("行级写入失败（已隔离，将进入重试）: target={} key={} 关联消息数={} reason={}",
+                    cfg.target().qualifiedTable(), f.key(), f.sources().size(), rootMessage(cause));
             return;
         }
         int mid = chunk.size() / 2;
@@ -147,7 +145,7 @@ public class PgWriter {
                 if (!isDataLevel(e)) {
                     throw e; // 交给上层判定为 PG 级故障
                 }
-                isolate(cfg, meta, half, actions, failed);
+                isolate(cfg, meta, half, actions, failures, e);
             }
         }
     }
@@ -172,8 +170,11 @@ public class PgWriter {
         return null;
     }
 
-    private static String rootMessage(DataAccessException e) {
-        Throwable root = e.getMostSpecificCause();
-        return root == null ? e.getMessage() : root.getMessage();
+    private static String rootMessage(Throwable e) {
+        Throwable root = (e instanceof DataAccessException dae) ? dae.getMostSpecificCause() : e;
+        if (root == null) {
+            root = e;
+        }
+        return root.getMessage();
     }
 }

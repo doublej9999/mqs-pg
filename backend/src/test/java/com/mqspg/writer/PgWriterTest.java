@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -43,6 +44,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @ActiveProfiles("dev")
+// 关键：关掉自动消费。否则后台线程会与测试争抢同一批消息，
+// 断言变得不确定（消息可能被消费线程提前拉走）
+@TestPropertySource(properties = "mqs-pg.consumer.auto-start=false")
 class PgWriterTest {
 
     private static final long TEST_ID_1 = 990_001L;

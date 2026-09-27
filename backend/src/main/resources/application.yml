@@ -108,3 +108,7 @@ mqs-pg:
     recovery-threshold: 2
     probe-interval: 5s
     probe-timeout: 3s
+  consumer:
+    # 启动后为所有 ACTIVE 路由自动拉起消费线程。
+    # 跑离线测试时置为 false，避免后台线程干扰断言。
+    auto-start: true

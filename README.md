@@ -51,6 +51,13 @@ cd backend
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
+PowerShell 下 `-Dkey=value` 会被拆坏（Maven 报 `Unknown lifecycle phase '.run.profiles=dev'`），
+改用环境变量：
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE = 'dev'; mvn spring-boot:run
+```
+
 `dev` profile 会额外加载 `db/demo` 下的种子数据：路由 1（`order-topic` / `order.updated`）
 及其目标表 `biz_demo.orders`，用于本地联调。
 
@@ -64,15 +71,42 @@ curl http://localhost:8080/api/routes
 curl http://localhost:8080/api/routes/1
 ```
 
-### 4. 测试
+### 4. 端到端试跑（mock MQ）
+
+`mqs-pg.mqs.vendor=mock`（默认）时会启用进程内消息代理，因此**不必等平台 MQS**
+就能把整条链路跑通：投递 → 消费 → 转换 → 折叠 → MERGE → ACK。
+
+```bash
+# 投递三条同 id、乱序 update_time 的消息
+for p in \
+  '{"id":970001,"name":"first","amount":10.00,"status":"CREATED","updatedAt":"2026-01-01T10:00:00+08:00"}' \
+  '{"id":970001,"name":"second","amount":20.00,"status":"PAID","updatedAt":"2026-01-01T12:00:00+08:00"}' \
+  '{"id":970001,"name":"stale","amount":5.00,"status":"CREATED","updatedAt":"2026-01-01T09:00:00+08:00"}' ; do
+  curl -s -X POST http://localhost:8080/api/mock/publish \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg b "$p" '{topic:"order-topic",tag:"order.updated",body:$b}')"
+done
+
+# 观察消费计数
+curl -s http://localhost:8080/api/mock/status/1
+
+# 期望：写入的是 12:00 那条（20.00 / status=2），09:00 的旧版本被单调守卫拦住
+```
+
+注意 `body` 是**字符串**形式的 JSON 报文，而不是嵌套对象——这样可以直接粘贴原始
+报文，避免被 Spring 重新序列化而改变字段顺序或数值精度。
+
+### 5. 测试
 
 ```bash
 cd backend
 mvn test
 ```
 
-`PgWriterTest` 是集成测试，需要本地 PostgreSQL 与 dev 种子数据可用。
-后续会迁移到 Testcontainers。
+集成测试（`PgWriterTest` / `PipelineIntegrationTest` / `RouteConsumerIntegrationTest`）
+依赖本地 PostgreSQL 与 dev 种子数据；后续会迁移到 Testcontainers。
+三个集成测试都设置 `mqs-pg.consumer.auto-start=false`，
+避免后台消费线程与测试争抢同一批消息。
 
 ---
 
@@ -90,9 +124,12 @@ mqs-pg/
         │   │   ├── MqsPgApplication.java
         │   │   ├── common/       # 领域模型（TargetRow/KeyTuple/MergeAction）、错误体系、JSONB、加解密
         │   │   ├── config/       # 配置域：实体、Mapper、注册表、服务、DTO
-        │   │   ├── mqs/          # MQS SPI（平台实现待接入，见 ADR-01）
-        │   │   ├── writer/       # 折叠、SQL 生成、PG 写入、表元数据、多数据源池
-        │   │   └── console/      # 控制台 REST API
+        │   │   ├── mqs/          # MQS SPI + mock 实现（平台实现待接入，见 ADR-01）
+        │   │   ├── transform/    # 转换引擎：JSONPath、JSLT、表达式求值、类型转换
+        │   │   ├── writer/       # 折叠、SQL 生成、PG 写入、表元数据、批次管理、多数据源池
+        │   │   ├── consumer/     # 消费循环、PG 健康闸门、消费状态机
+        │   │   ├── retry/        # 重试任务持久化与指数退避
+        │   │   └── console/      # 控制台 REST API（含 mock 投递入口）
         │   └── resources/
         │       ├── application.yml
         │       ├── application-dev.yml
@@ -141,11 +178,11 @@ mqs-pg/
 | 0 后端骨架（Boot 4.1.1 + MyBatis-Plus + Flyway，可启动、可迁移） | ✅ |
 | 1 配置域（实体 / Mapper / 注册表 / 服务 / REST API） | ✅ |
 | 2 PG Writer（MERGE RETURNING + 折叠 + 二分隔离）+ 测试 | ✅ |
-| 3 MQS SPI 平台实现与 mock 消费者、消费状态机 | ⏳ |
-| 4 Transform Engine（JSONPath / JSLT / 类型转换 / 错误分类） | ⏳ |
-| 5 Batch Manager（双触发、版本绑定、结果 → ACK 映射） | ⏳ |
+| 3 MQS SPI + mock 消费者、PG 健康闸门、消费状态机、消费循环 | ✅ |
+| 4 Transform Engine（JSONPath / JSLT / 表达式求值 / 类型转换 / 错误分类） | ✅ |
+| 5 Batch Manager（双触发、版本绑定、结果 → ACK 映射） | ✅ |
 | 6 重试表调度器（指数退避）+ DLQ | ⏳ |
 | 7 Raw Message 分区留存 + TTL 维护 | ⏳ |
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ⏳ |
 
-阶段 0–2 的验证结果见 tech-design.md 附录 E.5。
+阶段 0–5 的验证结果见 tech-design.md 附录 E。当前 `mvn test`：**23 个用例全部通过**。

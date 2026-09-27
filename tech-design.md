@@ -2194,3 +2194,114 @@ Batch Manager、重试表调度器与 DLQ、Raw Message 分区留存、Console �
   拆分留待 V2。当前 `PgWriterTest` 直接依赖本地 docker PG，
   后续应迁移到 Testcontainers。
 
+## E.7 阶段二/三实现补记（Transform Engine、消费循环、Batch Manager）
+
+### E.7.1 ACK 决策不是布尔值
+
+实现阶段最重要的一个修正：**「是否 ACK」在实现里是四种去向，而不是 true/false**。
+正文 §7.4 只写了「成功 ACK、失败不 ACK」，落到代码里必须区分：
+
+| 去向 | 含义 | 何时产生 |
+| --- | --- | --- |
+| `ACK` | 正常写入成功 | `INSERTED` / `UPDATED` / `SKIPPED_OLD_VERSION` |
+| `ACK_DEFERRED` | 已落重试表，可以 ACK | 行级数据错误、可重试的转换错误 |
+| `ACK_DLQ` | 已写终态错误流水，可以 ACK | 不可重试的 DATA 类错误 |
+| `NO_ACK` | **不得 ACK**，等 MQ 重投 | PG 级故障；或重试表/错误流水**落库失败** |
+
+最后一行是最容易写错的地方：落库失败时如果仍然 ACK，这条消息就**永久消失**了。
+因此 `BatchManager` 里每一处 `ACK_DEFERRED` / `ACK_DLQ` 都被包在
+`try { 落库 } catch { 降级为 NO_ACK }` 中。宁可重复投递，也不能丢。
+
+另一条设计约束：`BatchManager` **只产出结论，不执行 ACK**，ACK 由
+`RouteConsumer#applyDispositions` 单点执行。这样「该不该 ACK」可以纯逻辑测试，
+而「ACK 有没有真的发出去」只有一处需要审计。
+
+### E.7.2 错误严重级别的修正
+
+正文 §8.5 把取值/转换类错误定为 `TRANSIENT`，实现时改为 `DATA`：
+
+- `PATH_ERROR`、`TYPE_CONVERSION_ERROR`、`EXPRESSION_ERROR` → `DATA`
+
+理由：这些错误完全由**消息内容**决定，重试一百次结果相同，除了堆积重试队列没有别的作用。
+`ENUM_MAPPING_ERROR`、`DATETIME_FORMAT_ERROR`、`MISSING_REQUIRED_FIELD`、`JSON_PARSE_ERROR`
+原本就是 `DATA`，现在同一类错误有了统一的级别。
+
+保留的逃生口：`mqs-pg.retry.retry-data-errors`（对应附录 C-01）。
+若上游是最终一致的（先发事件、后补字段），打开它即可让 DATA 类错误也进重试队列。
+
+### E.7.3 表达式引擎：自研替代 Aviator
+
+附录 C-02 提出的许可证问题在实现阶段做了决断：**不用 Aviator**，
+改为自研受限表达式求值器 `SimpleExpressionEvaluator`（递归下降，约 500 行）。
+
+支撑这个决定的事实是：映射表达式实际只需要
+四则运算、比较、逻辑、三元与少量字符串函数，且表达式**只来自配置库**。
+自研实现完全没有注入面（无属性赋值、无索引写入、无方法调用），
+也就不需要为「沙箱第三方脚本引擎」再引入一层安全评审。
+
+支持的语法：`+ - * / %`、`== != < <= > >=`、`&& || !`、`? :`、
+`upper lower trim length concat coalesce abs round floor ceil int long decimal string now`。
+`+` 在两侧均可数值化时做加法，否则做字符串拼接（与 JS 一致）。
+
+### E.7.4 类型转换的两个实测坑
+
+1. **`java.sql.Date` 是 `java.util.Date` 的子类，但它的 `toInstant()` 会抛
+   `UnsupportedOperationException`**。因此时间转换必须先判 `java.sql.Timestamp`
+   与 `java.sql.Date`，再判 `java.util.Date`，否则从 PG 读回的时间值一进转换器就炸。
+
+2. **数值一律经 `BigDecimal` 再 `longValueExact()`**。
+   直接 `Long.parseLong` 或 `((Number) v).longValue()` 会把 `1.9` 静默截断成 `1`，
+   这类错误落库后极难发现。宁可报 `TYPE_CONVERSION_ERROR`。
+
+### E.7.5 行级失败触发条件实测
+
+`PgWriter` 的二分隔离在端到端测试里用真实约束验证过：
+
+| 制造手法 | 实测 SQLSTATE | 分类 | 结果 |
+| --- | --- | --- | --- |
+| `status` 传入非整数文本 | `22P02` | 数据级 | 隔离到行，进重试表 |
+| 20 位整数写入 `NUMERIC(18,2)` | `22003` | 数据级 | 隔离到行，进重试表 |
+
+`NUMERIC(18,2)` 的溢出用例（`99999999999999999999`）尤其有价值：
+它证明**转换阶段通过、写入阶段才失败**的路径也能被正确隔离 ——
+这正是「好行照写、坏行落重试表后 ACK」这条不变量的真实检验。
+
+### E.7.6 阶段二/三验证结果
+
+| 验证项 | 结果 |
+| --- | --- |
+| 同批次同 Key 乱序折叠（4 条消息，最旧者最后到） | 通过，落库为 `update_time` 最大者 |
+| 旧版本后到不覆盖新数据 | 通过，被判定 `SKIPPED_OLD_VERSION` 且仍被 ACK |
+| `update_time` 平局由消费顺序决定（PRD §8） | 通过，后到者胜 |
+| 重复投递幂等（ACK 丢失场景） | 通过，第二次写入不影响行值 |
+| 必填字段缺失 → DLQ + ACK，且不阻塞同批好行 | 通过，`MISSING_REQUIRED_FIELD` / `is_final=true` |
+| 非法 JSON → DLQ + ACK | 通过，`JSON_PARSE_ERROR` |
+| 枚举值未知 → DLQ + ACK | 通过，`ENUM_MAPPING_ERROR` |
+| 行级 PG 数据错误 → 重试表 + ACK（ACK 不变量） | 通过，`rt_retry_task.status='PENDING'` 已落库 |
+| 真实消费循环（自动拉起、条数触发、时间触发） | 通过，3 个集成测试 |
+| 端到端 HTTP 试跑（mock 投递 → 落库） | 通过，乱序 3 条折叠为 12:00 那条 |
+
+`mvn test`：**23 个用例全部通过**。
+
+### E.7.7 测试隔离要求（重要）
+
+`mqs-pg.consumer.auto-start` 默认为 `true`，应用启动后会自动为所有 ACTIVE 路由
+拉起消费线程。这在集成测试里是**有害**的：后台线程会与测试争抢同一批消息，
+断言变得不确定。
+
+因此 `PgWriterTest`、`PipelineIntegrationTest`、`RouteConsumerIntegrationTest`
+都显式设置 `mqs-pg.consumer.auto-start=false`。
+`RouteConsumerIntegrationTest` 则自行构造 `RouteConsumer` 并控制其生命周期，
+以便在确定的时间点断言。
+
+### E.7.8 PowerShell 下的 Maven 参数
+
+`mvn spring-boot:run -Dspring-boot.run.profiles=dev` 在 PowerShell 中会被拆成
+`-Dspring-boot` 与 `.run.profiles=dev`，Maven 报
+`Unknown lifecycle phase ".run.profiles=dev"`。改用环境变量：
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE = 'dev'; mvn spring-boot:run
+```
+
+

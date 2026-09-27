@@ -13,13 +13,18 @@ import lombok.Getter;
 public enum ErrorCode {
 
     // ---- 数据/转换类 ----
+    //
+    // 取值与转换阶段的失败完全由**消息内容**决定：同一条消息重试 10 次结果不变。
+    // 因此一律标为 DATA（直接进 DLQ），避免把算力浪费在必然失败的重试上。
+    // 若某路由的上游是最终一致的（先发事件、后补字段），可用路由级开关
+    // retryDataErrors 打开重试，见附录 C-01。
     JSON_PARSE_ERROR(ErrorStage.PARSE, ErrorSeverity.DATA),
     JSLT_ERROR(ErrorStage.JSLT, ErrorSeverity.DATA),
-    PATH_ERROR(ErrorStage.PATH, ErrorSeverity.TRANSIENT),
-    TYPE_CONVERSION_ERROR(ErrorStage.CONVERT, ErrorSeverity.TRANSIENT),
+    PATH_ERROR(ErrorStage.PATH, ErrorSeverity.DATA),
+    TYPE_CONVERSION_ERROR(ErrorStage.CONVERT, ErrorSeverity.DATA),
     ENUM_MAPPING_ERROR(ErrorStage.CONVERT, ErrorSeverity.DATA),
     DATETIME_FORMAT_ERROR(ErrorStage.CONVERT, ErrorSeverity.DATA),
-    EXPRESSION_ERROR(ErrorStage.EXPRESSION, ErrorSeverity.TRANSIENT),
+    EXPRESSION_ERROR(ErrorStage.EXPRESSION, ErrorSeverity.DATA),
     MISSING_REQUIRED_FIELD(ErrorStage.VALIDATE, ErrorSeverity.DATA),
 
     // ---- 写入类 ----

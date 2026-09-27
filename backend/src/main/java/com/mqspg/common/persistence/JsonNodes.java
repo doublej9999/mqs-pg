@@ -46,4 +46,36 @@ public final class JsonNodes {
         String v = text(node, field);
         return v == null ? defaultValue : v;
     }
+
+    /**
+     * 把 JSONPath / JSLT 的取值结果解包为标准 Java 值。
+     *
+     * <p>JSONPath 返回 {@code JsonNode} 还是 Java 原生类型取决于 provider，
+     * 转换前统一走此方法，避免下游到处 {@code instanceof}。
+     * 容器类型（对象/数组）序列化为 JSON 字符串 —— 目标列都是标量。
+     */
+    public static Object unwrap(Object raw) {
+        if (!(raw instanceof JsonNode n)) {
+            return raw;
+        }
+        if (n.isNull() || n.isMissingNode()) {
+            return null;
+        }
+        if (n.isTextual()) {
+            return n.asText();
+        }
+        if (n.isBoolean()) {
+            return n.booleanValue();
+        }
+        if (n.isIntegralNumber()) {
+            return n.longValue();
+        }
+        if (n.isFloatingPointNumber()) {
+            return n.decimalValue();
+        }
+        if (n.isContainerNode()) {
+            return n.toString();
+        }
+        return n.asText();
+    }
 }
