@@ -6,6 +6,7 @@ import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
 import com.mqspg.mqs.spi.MqsConsumerFactory;
 import com.mqspg.mqs.spi.MqsMessage;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BatchManager;
 import com.mqspg.writer.batch.BatchResult;
 import com.mqspg.writer.batch.BufferedMessage;
@@ -16,9 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
@@ -38,11 +37,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>不启动后台线程（{@code auto-start=false}），直接驱动 {@link BatchManager}，
  * 让断言完全确定。真实消费循环由 {@code RouteConsumerIntegrationTest} 覆盖。
  *
- * <p><b>依赖本地 PostgreSQL</b>（与 PgWriterTest 同）。测试数据 id 落在
+ * <p><b>依赖 Testcontainers PostgreSQL</b>（与 PgWriterTest 同，见
+ * {@link AbstractPgIntegrationTest}）。测试数据 id 落在
  * {@code 980001..980099}，用前后清理保证可重复执行。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 // 关掉原始留存：它经由 BatchManager 的旁路写入，与这里的断言无关，
 // 而且会把消息写进 raw_message（无分区时落到 DEFAULT，影响其它测试）。
 @TestPropertySource(properties = {
@@ -50,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "mqs-pg.raw.enabled=false"
 })
 @DisplayName("端到端管线")
-class PipelineIntegrationTest {
+class PipelineIntegrationTest extends AbstractPgIntegrationTest {
 
     private static final long ROUTE_ID = 1L;
     private static final String TOPIC = "order-topic";

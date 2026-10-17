@@ -2,14 +2,13 @@ package com.mqspg.retry;
 
 import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
@@ -28,14 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>调度轮询被推到 24 小时，测试直接调用 {@code processOne}，
  * 断言完全确定，不受后台线程影响。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 @TestPropertySource(properties = {
         "mqs-pg.consumer.auto-start=false",
         "mqs-pg.retry.poll-interval=24h"
 })
 @DisplayName("重试调度器")
-class RetrySchedulerTest {
+class RetrySchedulerTest extends AbstractPgIntegrationTest {
 
     @Autowired
     private RetryScheduler scheduler;

@@ -221,6 +221,54 @@
   - 超大报文的留存从 JSONB 退化为文本（仍可查原文），换取旁路线程不被拖慢。
   - 回滚：删除阈值判断即可。
 
+---
+
+## 2026-10-17 · D1 集成测试迁移到 Testcontainers
+
+- **背景**
+  - 六个集成测试（`PgWriterTest` / `PipelineIntegrationTest` / `RouteConsumerIntegrationTest` /
+    `RetrySchedulerTest` / `RawRetentionTest` / `ConfigAdminTest`）直连本机 PostgreSQL +
+    dev 种子：跑测试前必须先 `docker run` 一个 PG、再 `spring-boot:run` 灌种子，
+    换台机器/CI 就无法回归；而且它们**隐式依赖本机库里的旧表**（见下）。
+
+- **改动**
+  - `pom.xml`（test scope）引入 `org.testcontainers:testcontainers-postgresql`
+    （注意 2.x 的模块名不再是 `org.testcontainers:postgresql`），版本由 Boot 导入的
+    `testcontainers-bom` 管理。
+  - 新增 `com.mqspg.support.AbstractPgIntegrationTest`：
+    - 静态块里启动**单例** `postgres:18`（`@Container` 会按测试类反复启停，太慢；
+      单例由 Ryuk 在 JVM 退出时回收）；
+    - `@DynamicPropertySource` 把 `spring.datasource.url/username/password` 指向容器；
+    - 密码取 `123456`，与 dev 种子里目标数据源的 `{noop}123456` 一致，
+      于是只需把种子里的 **URL** 改写到容器（`@BeforeEach` 一条 `UPDATE cfg_datasource`），
+      密码与断言语义都不用动；
+    - 六个测试类改为 `extends` 本类，仅保留各自的 `@TestPropertySource`。
+  - `ConfigAdminTest` 里硬编码的 `jdbc:postgresql://localhost:5432/postgres`
+    改为 `containerJdbcUrl()`（它自建的数据源要能被 `introspection` 真连上）。
+
+- **踩到的坑（值得记一笔）**
+  - Testcontainers 的 `PostgreSQLContainer#getJdbcUrl()` 返回的串**已经带了** `?loggerLevel=OFF`。
+    直接 `getJdbcUrl() + "?currentSchema=mqs_pg,public"` 会拼出两个 `?`，
+    整个查询串失效 → `search_path` 没设上 → MyBatis 的无限定 SQL（`FROM cfg_route`）
+    落到 `public` → 启动报 `relation "cfg_route" does not exist`。
+    修法：先剥掉原查询串再拼（`AbstractPgIntegrationTest`）。
+  - 同一个报错**看起来**像"Flyway 还没跑完就查库"。实测加了
+    `@DependsOnDatabaseInitialization` 也修不好，去掉后测试照过 ——
+    因为 MyBatis 的 `SqlSessionFactory` 本身已被 Boot 接入数据库初始化依赖，
+    `DbConfigRegistry`（依赖 mapper）自然排在 Flyway 之后。**不要**照症状去加依赖注解。
+
+- **验证**
+  - 命令：`mvn test`。
+  - 结果：**`Tests run: 51, Failures: 0, Errors: 0, Skipped: 0` — BUILD SUCCESS**。
+  - 关键验收：`docker stop pg-min`（本机 5432 不可达，`Test-NetConnection` 返回 `False`）
+    后再跑 `mvn test`，仍 **51/51 通过**；随后 `docker start pg-min` 复原。
+
+- **影响与回滚**
+  - 测试不再需要预置 PG 与种子，也不再受本机库残留数据影响；代价是首次拉 `postgres:18`
+    镜像较慢、`mvn test` 需要 Docker。
+  - 回滚：删除基类与依赖，恢复六个测试类的 `@SpringBootTest @ActiveProfiles("dev")`。
+
+
 
 
 

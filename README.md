@@ -132,12 +132,19 @@ mvn test
 ```
 
 集成测试（`PgWriterTest` / `PipelineIntegrationTest` / `RouteConsumerIntegrationTest` /
-`RetrySchedulerTest` / `RawRetentionTest` / `ConfigAdminTest`）依赖本地 PostgreSQL 与
-dev 种子数据；后续会迁移到 Testcontainers。它们都设置 `mqs-pg.consumer.auto-start=false`，
-避免后台消费线程与测试争抢同一批消息。
+`RetrySchedulerTest` / `RawRetentionTest` / `ConfigAdminTest`）跑在 **Testcontainers** 起的
+`postgres:18` 容器上：只要本机装了 Docker，**不必**事先起 PostgreSQL，也不必手工灌种子 ——
+Flyway 会在空容器里建 schema（`db/migration` + dev 的 `db/demo`）并写入 demo 种子。
+容器密码固定 `123456`，与种子里目标数据源的 `{noop}123456` 保持一致。
+六个测试类都继承 `AbstractPgIntegrationTest`，它负责启动容器并把连接串注入 Spring；
+它们都设置 `mqs-pg.consumer.auto-start=false`，避免后台消费线程与测试争抢同一批消息。
 
 其中驱动 `BatchManager` 的两个测试额外设置 `mqs-pg.raw.enabled=false`：
 原始留存是**旁路**，开着会往 `raw_message` 写数据，与这两个测试的断言无关。
+
+> 踩过的坑：`PostgreSQLContainer#getJdbcUrl()` 返回的串**已带** `?loggerLevel=OFF`，
+> 再拼一个 `?currentSchema=...` 会拼出两个 `?`，整个查询串失效 —— MyBatis 的无限定 SQL
+> 落到 `public`，报 `relation "cfg_route" does not exist`。连接串拼装见 `AbstractPgIntegrationTest`。
 
 端到端验收（需要后端已启动）：
 
@@ -304,16 +311,18 @@ mqs-pg/
 | 7 Raw Message 分区留存 + TTL 维护 | ✅ |
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
-| 10 优化：A 稳定性 / B 可观测性 / C 性能 / D 交付 / E 工程化 / F 前端 | 🚧 进行中 |
+| 10 优化：A 稳定性 / B 可观测性 / C 性能 / D 交付 / E 工程化 / F 前端 | 🚧 进行中（A、B、C 已交付，D1 完成） |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
 当前 `mvn test`：**51 个用例全部通过**（其中 14 个是阶段 9 新增的配置域写操作测试），
+集成测试已迁移到 Testcontainers —— **本机不启 PostgreSQL、仅需 Docker 即可跑通**；
 `scripts/e2e-config-api.ps1` 端到端断言全部通过。
 
 优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)，
 每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
 当前进度：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志、
-C1 列表接口消除 N+1、C2 `nextVersionNumber` 聚合查询、C3 留存超大报文跳过解析**已实现（详见 evolution.md）。
+C1 列表接口消除 N+1、C2 `nextVersionNumber` 聚合查询、C3 留存超大报文跳过解析、
+D1 集成测试迁移 Testcontainers**已实现（详见 evolution.md）。
 
 ### 仍待接入的部分
 

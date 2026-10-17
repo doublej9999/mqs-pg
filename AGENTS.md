@@ -30,7 +30,7 @@ Frontend (run from `frontend/`): `pnpm install`, `pnpm dev` (`:5173`), `pnpm bui
 
 ## Prerequisites (integration work)
 - PostgreSQL **17+** is required (`MERGE ... RETURNING merge_action()`); tested on 18.1. Local default: a docker container named `postgres`, `POSTGRES_PASSWORD=123456`, db `postgres`; override with `MQS_PG_DB_URL` / `MQS_PG_DB_USER` / `MQS_PG_DB_PASSWORD`. Schema `mqs_pg` and all tables are created by Flyway.
-- The backend integration tests (`PgWriterTest`, `PipelineIntegrationTest`, `RouteConsumerIntegrationTest`, `RetrySchedulerTest`, `RawRetentionTest`, `ConfigAdminTest`) hit that live PG and rely on the `dev` seed data; they set `consumer.auto-start=false` so the background consumer does not race the assertions.
+- The backend integration tests (`PgWriterTest`, `PipelineIntegrationTest`, `RouteConsumerIntegrationTest`, `RetrySchedulerTest`, `RawRetentionTest`, `ConfigAdminTest`) run against a **Testcontainers** `postgres:18` container (see `AbstractPgIntegrationTest`): only Docker is needed — no pre-started PG and no manual seeding, since Flyway applies `db/migration` + dev `db/demo` on a fresh container. They set `consumer.auto-start=false` so the background consumer does not race the assertions.
 - `scripts/e2e-config-api.ps1` needs the backend running **and** a docker container literally named `postgres` — it shells out to `docker exec <name> psql` for setup/teardown.
 - `mqs-pg.mqs.vendor=mock` (default) runs an in-process broker, so the full pipeline works without a real MQ platform.
 

@@ -9,6 +9,7 @@ import com.mqspg.mqs.mock.MockMqsBroker;
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
 import com.mqspg.mqs.spi.MqsConsumerFactory;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BatchManager;
 import com.mqspg.writer.batch.BatchProperties;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
@@ -17,9 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
@@ -35,8 +34,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>批次参数被压到很小（size=3 / flush=200ms）以便快速触发两种条件。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 @TestPropertySource(properties = {
         "mqs-pg.consumer.auto-start=false",
         // 原始留存是旁路，与消费循环断言无关；开着会往 raw_message 写数据
@@ -46,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "mqs-pg.batch.pull-size=10"
 })
 @DisplayName("消费循环")
-class RouteConsumerIntegrationTest {
+class RouteConsumerIntegrationTest extends AbstractPgIntegrationTest {
 
     private static final long ROUTE_ID = 1L;
     private static final String TOPIC = "order-topic";

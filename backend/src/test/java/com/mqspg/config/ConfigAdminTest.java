@@ -15,14 +15,13 @@ import com.mqspg.config.service.ConfigAdminService;
 import com.mqspg.config.service.ConfigService;
 import com.mqspg.config.service.IntrospectionService;
 import com.mqspg.consumer.ConsumerManager;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -44,8 +43,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>用 {@code it-cfg-} 前缀隔离本测试创建的配置行，避免与 demo 种子数据
  * （datasource/target/route 各 id=1）以及其它测试互相干扰。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 @TestPropertySource(properties = {
         // 后台线程会与测试争抢，断言变得不确定（见 tech-design E.7.7）
         "mqs-pg.consumer.auto-start=false",
@@ -54,7 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "mqs-pg.raw.enabled=false"
 })
 @DisplayName("配置域写操作")
-class ConfigAdminTest {
+class ConfigAdminTest extends AbstractPgIntegrationTest {
 
     private static final String PREFIX = "it-cfg-";
     private static final String TABLE = "cfg_admin_it";
@@ -116,7 +113,7 @@ class ConfigAdminTest {
 
         // 密码留空 → 保留原值
         admin.updateDatasource(created.id(),
-                new DatasourceRequest(PREFIX + "ds", "jdbc:postgresql://localhost:5432/postgres",
+                new DatasourceRequest(PREFIX + "ds", containerJdbcUrl(),
                         "postgres", "  ", null));
         assertEquals("{noop}123456", jdbc.queryForObject(
                 "SELECT password_enc FROM cfg_datasource WHERE id = ?", String.class, created.id()));
@@ -386,11 +383,11 @@ class ConfigAdminTest {
     @DisplayName("更新数据源：非空 poolConfig 能落库，且留空密码时原密码保留")
     void updateDatasourceWritesPoolConfig() {
         DatasourceDto ds = admin.createDatasource(new DatasourceRequest(
-                PREFIX + "ds-pool", "jdbc:postgresql://localhost:5432/postgres",
+                PREFIX + "ds-pool", containerJdbcUrl(),
                 "postgres", "123456", Map.of("maximumPoolSize", 7)));
 
         DatasourceDto updated = admin.updateDatasource(ds.id(), new DatasourceRequest(
-                PREFIX + "ds-pool", "jdbc:postgresql://localhost:5432/postgres",
+                PREFIX + "ds-pool", containerJdbcUrl(),
                 "postgres", "   ", Map.of("maximumPoolSize", 9)));
 
         assertNotNull(updated.poolConfig(), "poolConfig 应被写入");
@@ -456,7 +453,7 @@ class ConfigAdminTest {
 
     private DatasourceRequest dsRequest(String name, String password) {
         return new DatasourceRequest(name,
-                "jdbc:postgresql://localhost:5432/postgres", "postgres", password, null);
+                containerJdbcUrl(), "postgres", password, null);
     }
 
     private TargetRequest targetRequest(String name, Long datasourceId) {

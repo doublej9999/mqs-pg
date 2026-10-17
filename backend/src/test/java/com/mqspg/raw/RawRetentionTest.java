@@ -1,15 +1,14 @@
 package com.mqspg.raw;
 
 import com.mqspg.mqs.FakeMessage;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BufferedMessage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
@@ -33,8 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p><b>测试写入的时间一律用 {@link LocalDateTime}</b>：分区边界字面量是按会话时区
  * 解释的，用带偏移量的时间会让「这条消息属于哪一天」变得难以推理。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 @TestPropertySource(properties = {
         "mqs-pg.consumer.auto-start=false",
         // 别让每日维护任务在测试期间自己跑
@@ -42,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "mqs-pg.retry.poll-interval=24h"
 })
 @DisplayName("原始留存与分区")
-class RawRetentionTest {
+class RawRetentionTest extends AbstractPgIntegrationTest {
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
 

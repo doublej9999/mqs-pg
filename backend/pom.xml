@@ -114,6 +114,16 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+            集成测试用真实 PostgreSQL（D1）。Testcontainers 2.x 的模块名是
+            testcontainers-postgresql（不再是 org.testcontainers:postgresql），
+            版本由 Boot 导入的 testcontainers-bom 管理。
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

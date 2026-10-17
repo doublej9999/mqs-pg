@@ -6,6 +6,7 @@ import com.mqspg.common.model.RouteConfig;
 import com.mqspg.common.model.TargetRow;
 import com.mqspg.config.service.ConfigService;
 import com.mqspg.mqs.FakeMessage;
+import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
 import com.mqspg.writer.fold.BatchFolder;
@@ -15,9 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
@@ -40,14 +39,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>数据级错误能被二分隔离到具体行，不阻塞同批次的好行（PRD §49）。</li>
  * </ol>
  *
- * <p>依赖：本地 docker PostgreSQL 与 dev profile 的 demo 种子数据（路由 1 / biz_demo.orders）。
+ * <p>依赖：Testcontainers 起的 PostgreSQL 与 dev profile 的 demo 种子数据
+ * （路由 1 / biz_demo.orders），见 {@link AbstractPgIntegrationTest}。
  */
-@SpringBootTest
-@ActiveProfiles("dev")
 // 关键：关掉自动消费。否则后台线程会与测试争抢同一批消息，
 // 断言变得不确定（消息可能被消费线程提前拉走）
 @TestPropertySource(properties = "mqs-pg.consumer.auto-start=false")
-class PgWriterTest {
+class PgWriterTest extends AbstractPgIntegrationTest {
 
     private static final long TEST_ID_1 = 990_001L;
     private static final long TEST_ID_2 = 990_002L;
