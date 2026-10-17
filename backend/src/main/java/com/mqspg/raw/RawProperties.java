@@ -40,4 +40,12 @@ public class RawProperties {
 
     /** 是否真的删除过期分区。置 false 时只告警，用于灰度观察。 */
     private boolean dropExpired = true;
+
+    /**
+     * 超过此字节数的报文**不做 JSON 解析**，直接按原文存 {@code payload_raw}。
+     *
+     * <p>留存是旁路，解析只为让合法 JSON 落进 JSONB 以便 SQL 查询；
+     * 对超大报文而言这次解析纯属浪费，还可能拖慢旁路线程。默认 1 MiB。
+     */
+    private int payloadParseMaxBytes = 1_048_576;
 }

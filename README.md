@@ -312,7 +312,8 @@ mqs-pg/
 
 优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)，
 每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
-当前进度：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志**已实现（详见 evolution.md）。
+当前进度：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志、
+C1 列表接口消除 N+1、C2 `nextVersionNumber` 聚合查询、C3 留存超大报文跳过解析**已实现（详见 evolution.md）。
 
 ### 仍待接入的部分
 

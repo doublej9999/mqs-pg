@@ -101,7 +101,7 @@ public class RawStore implements AutoCloseable {
         }
     }
 
-    private static RawRecord toRecord(long routeId, BufferedMessage buffered) {
+    private RawRecord toRecord(long routeId, BufferedMessage buffered) {
         MqsMessage handle = buffered.handle();
         byte[] body = handle.body();
 
@@ -109,11 +109,17 @@ public class RawStore implements AutoCloseable {
         String raw = null;
         if (body != null && body.length > 0) {
             String text = new String(body, StandardCharsets.UTF_8);
-            try {
-                JsonbTypeHandler.mapper().readTree(body);
-                json = text;      // 合法 JSON → 存 JSONB，可被 SQL 直接查询
-            } catch (Exception e) {
-                raw = text;       // 解析失败 → 原样存文本，排障时仍能看到原文
+            if (body.length > props.getPayloadParseMaxBytes()) {
+                // 超大报文：跳过解析，直接留原文（C3）。
+                // 解析失败本身并不影响留存价值，只是无法用 JSONB 查询而已。
+                raw = text;
+            } else {
+                try {
+                    JsonbTypeHandler.mapper().readTree(body);
+                    json = text;      // 合法 JSON → 存 JSONB，可被 SQL 直接查询
+                } catch (Exception e) {
+                    raw = text;       // 解析失败 → 原样存文本，排障时仍能看到原文
+                }
             }
         }
         return new RawRecord(

@@ -21,7 +21,6 @@ import com.mqspg.config.entity.CfgDatasource;
 import com.mqspg.config.entity.CfgRoute;
 import com.mqspg.config.entity.CfgTarget;
 import com.mqspg.config.entity.CfgVersion;
-import com.mqspg.config.entity.RtConsumerState;
 import com.mqspg.config.event.ConfigChangedEvent;
 import com.mqspg.config.mapper.CfgDatasourceMapper;
 import com.mqspg.config.mapper.CfgRouteMapper;
@@ -92,9 +91,11 @@ public class ConfigAdminService {
     public List<DatasourceDto> listDatasources() {
         List<CfgDatasource> all = datasourceMapper.selectList(
                 Wrappers.<CfgDatasource>lambdaQuery().orderByAsc(CfgDatasource::getId));
+        // 一次 group by 拿到每个数据源的目标表数量，替代逐条 count（C1）
+        Map<Long, Long> counts = targetCountsByDatasource();
         List<DatasourceDto> out = new ArrayList<>(all.size());
         for (CfgDatasource ds : all) {
-            out.add(toDatasourceDto(ds));
+            out.add(toDatasourceDto(ds, counts.getOrDefault(ds.getId(), 0L)));
         }
         return out;
     }
@@ -177,9 +178,11 @@ public class ConfigAdminService {
     public List<TargetDto> listTargets() {
         List<CfgTarget> all = targetMapper.selectList(
                 Wrappers.<CfgTarget>lambdaQuery().orderByAsc(CfgTarget::getId));
+        // 一次批量取回涉及的数据源，替代逐条 selectById（C1）
+        Map<Long, CfgDatasource> dsById = loadDatasources(all);
         List<TargetDto> out = new ArrayList<>(all.size());
         for (CfgTarget t : all) {
-            out.add(toTargetDto(t));
+            out.add(toTargetDto(t, dsById.get(t.getDatasourceId())));
         }
         return out;
     }
@@ -561,15 +564,27 @@ public class ConfigAdminService {
         v.setChangeNote(note);
         v.setCreatedBy("console");
         v.setCreatedAt(OffsetDateTime.now());
-        versionMapper.insert(v);
+        try {
+            versionMapper.insert(v);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // UNIQUE(route_id, version) 兜底：并发下两个请求可能同时算到同一个版本号。
+            // 直接把 SQLSTATE 23505 抛给页面毫无意义，转成可读提示。
+            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+                    "版本号冲突（route=%d version=%d），请刷新后重试".formatted(routeId, version));
+        }
         return v;
     }
 
+    /** 下一个版本号：`SELECT max(version)` 聚合，而非把整表版本加载进内存。 */
     private int nextVersionNumber(long routeId) {
-        List<CfgVersion> all = versionMapper.selectList(Wrappers.<CfgVersion>lambdaQuery()
-                .eq(CfgVersion::getRouteId, routeId));
-        return all.stream().map(CfgVersion::getVersion).filter(java.util.Objects::nonNull)
-                .max(Comparator.naturalOrder()).orElse(0) + 1;
+        List<Map<String, Object>> rows = versionMapper.selectMaps(
+                Wrappers.<CfgVersion>query()
+                        .select("max(version) as max_version")
+                        .eq("route_id", routeId));
+        // 尚无版本时聚合行是 NULL，MyBatis 会把它映射成 null（甚至列表里的 null 元素）
+        Map<String, Object> row = rows.isEmpty() ? null : rows.get(0);
+        Object max = row == null ? null : row.get("max_version");
+        return (max instanceof Number n ? n.intValue() : 0) + 1;
     }
 
     private CfgVersion findDraft(long routeId) {
@@ -623,30 +638,69 @@ public class ConfigAdminService {
     private DatasourceDto toDatasourceDto(CfgDatasource ds) {
         Long count = targetMapper.selectCount(
                 Wrappers.<CfgTarget>lambdaQuery().eq(CfgTarget::getDatasourceId, ds.getId()));
+        return toDatasourceDto(ds, count == null ? 0L : count);
+    }
+
+    private DatasourceDto toDatasourceDto(CfgDatasource ds, long targetCount) {
         return new DatasourceDto(ds.getId(), ds.getName(), ds.getJdbcUrl(), ds.getUsername(),
                 ds.getPasswordEnc() != null && !ds.getPasswordEnc().isBlank(),
                 JsonNodes.toPlain(ds.getPoolConfig()),
-                count == null ? 0L : count,
+                targetCount,
                 ds.getCreatedAt(), ds.getUpdatedAt());
     }
 
+    /** datasource_id → 目标表数量，一次 group by 取回。 */
+    private Map<Long, Long> targetCountsByDatasource() {
+        List<Map<String, Object>> rows = targetMapper.selectMaps(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<CfgTarget>()
+                        .select("datasource_id", "count(*) as cnt")
+                        .groupBy("datasource_id"));
+        Map<Long, Long> counts = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            if (row == null) {
+                continue;
+            }
+            Object id = row.get("datasource_id");
+            Object cnt = row.get("cnt");
+            if (id instanceof Number n) {
+                counts.put(n.longValue(), cnt instanceof Number c ? c.longValue() : 0L);
+            }
+        }
+        return counts;
+    }
+
+    /** 批量取回目标表涉及的数据源。 */
+    private Map<Long, CfgDatasource> loadDatasources(List<CfgTarget> targets) {
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        for (CfgTarget t : targets) {
+            if (t.getDatasourceId() != null) {
+                ids.add(t.getDatasourceId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, CfgDatasource> out = new LinkedHashMap<>(ids.size());
+        for (CfgDatasource ds : datasourceMapper.selectBatchIds(ids)) {
+            out.put(ds.getId(), ds);
+        }
+        return out;
+    }
+
     private TargetDto toTargetDto(CfgTarget t) {
-        CfgDatasource ds = datasourceMapper.selectById(t.getDatasourceId());
+        return toTargetDto(t, datasourceMapper.selectById(t.getDatasourceId()));
+    }
+
+    private TargetDto toTargetDto(CfgTarget t, CfgDatasource ds) {
         return new TargetDto(t.getId(), t.getName(), t.getDatasourceId(),
                 ds == null ? null : ds.getName(),
                 t.getSchemaName(), t.getTableName(), readKeys(t), t.getUpdateTimeField());
     }
 
     private RouteSummaryDto toSummary(CfgRoute route) {
-        CfgTarget target = targetMapper.selectById(route.getTargetId());
-        RtConsumerState state = consumerStateMapper.selectById(route.getId());
-        return new RouteSummaryDto(
-                route.getId(), route.getName(), route.getTopic(), route.getTag(),
-                route.getTargetId(),
-                target == null ? null : target.getSchemaName() + "." + target.getTableName(),
-                route.getActiveVersion(), route.getStatus(),
-                state == null ? null : state.getStatus(),
-                state == null ? null : state.getReason());
+        return RouteSummaries.build(route,
+                targetMapper.selectById(route.getTargetId()),
+                consumerStateMapper.selectById(route.getId()));
     }
 
     private VersionSummaryDto toVersionSummary(CfgRoute route, CfgVersion v) {

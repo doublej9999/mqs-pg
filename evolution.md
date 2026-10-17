@@ -152,5 +152,75 @@
   - 仅日志格式与 ThreadLocal 读写，无业务语义变更。
   - 回滚：还原 `logging.pattern.console` 并移除各入口的 `MdcScope` 使用即可。
 
+---
+
+## 2026-10-17 · C1 控制台列表接口消除 N+1
+
+- **背景**
+  - `ConfigService#listRoutes` / `ConfigAdminService#listDatasources` / `#listTargets`
+    都在循环里按行查关联表：路由列表是 O(n) 次「目标表 + 消费状态」查询，
+    数据源列表每行一次 `count`，目标表列表每行一次数据源查询。
+  - `ConsoleController#overview` 又直接调用 `listRoutes`，使问题暴露在首页。
+
+- **改动**
+  - 新增 `config/service/RouteSummaries`：把两处**逐字段相同**的 `toSummary` 合并为一个
+    纯内存装配函数（不持有 Mapper，从结构上杜绝再次引入 N+1）。
+  - `ConfigService#listRoutes`：一次 `selectBatchIds` 取回全部目标表与消费状态，内存组装；
+    `#getRoute` 复用已加载的 target 与单次查询的 state，不再二次查。
+  - `ConfigAdminService#listDatasources`：用 `group by datasource_id` 一次拿到各数据源目标表数量；
+    `#listTargets`：一次 `selectBatchIds` 取回涉及的数据源。
+
+- **验证**
+  - 命令：`mvn test`。
+  - 结果：**`Tests run: 51, Failures: 0, Errors: 0, Skipped: 0` — BUILD SUCCESS**（页面数据不变）。
+
+- **影响与回滚**
+  - 纯查询装配优化，DTO 字段与语义不变；列表接口 SQL 次数由 O(n) 降为常数。
+  - 回滚：还原三个列表方法即可（`RouteSummaries` 可保留）。
+
+---
+
+## 2026-10-17 · C2 `nextVersionNumber` 改为聚合查询
+
+- **背景**
+  - `ConfigAdminService#nextVersionNumber` 先 `selectList` 把该路由**所有版本**加载进内存再取 max。
+
+- **改动**
+  - 改为 `SELECT max(version) FROM cfg_version WHERE route_id = ?`（`selectMaps` 聚合）。
+  - 空值保护：尚无版本时聚合行是 NULL，MyBatis 会映射成 `null`（甚至列表里的 `null` 元素），
+    已按行判空后回退到 0。
+  - `insertVersion` 捕获 `DuplicateKeyException`，把 SQLSTATE 23505 转成可读提示
+    「版本号冲突（route=… version=…），请刷新后重试」（并发下仍由 `UNIQUE(route_id, version)` 兜底）。
+
+- **验证**
+  - 命令：`mvn test`。
+  - 结果：**`Tests run: 51, Failures: 0, Errors: 0, Skipped: 0` — BUILD SUCCESS**（新建版本/保存草稿行为不变）。
+
+- **影响与回滚**
+  - SQL 由全量加载变为单行聚合；行为与错误信息更友好。
+  - 回滚：还原 `nextVersionNumber` 与 `insertVersion`。
+
+---
+
+## 2026-10-17 · C3 原始留存超大报文跳过 JSON 解析
+
+- **背景**
+  - `RawStore#toRecord` 对每条消息都 `mapper().readTree` 以判断能否存 JSONB；
+    留存是旁路，对超大报文这次解析纯属浪费，且无体积上限。
+
+- **改动**
+  - `RawProperties` 新增 `payload-parse-max-bytes`（默认 1048576 = 1 MiB）。
+  - `RawStore#toRecord`：报文超过阈值时**跳过解析**，直接存 `payload_raw`；
+    未超阈值时行为不变（合法 JSON → JSONB，非法 JSON → 原文）。
+
+- **验证**
+  - 命令：`mvn test`（`RawRetentionTest` 覆盖合法/非法 JSON 的留存路径）。
+  - 结果：**`Tests run: 51, Failures: 0, Errors: 0, Skipped: 0` — BUILD SUCCESS**。
+
+- **影响与回滚**
+  - 超大报文的留存从 JSONB 退化为文本（仍可查原文），换取旁路线程不被拖慢。
+  - 回滚：删除阈值判断即可。
+
+
 
 

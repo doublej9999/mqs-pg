@@ -32,6 +32,8 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * 配置域服务：查询、版本发布与激活（tech-design §12.3）。
@@ -69,9 +71,12 @@ public class ConfigService {
     public List<RouteSummaryDto> listRoutes() {
         List<CfgRoute> routes = routeMapper.selectList(
                 Wrappers.<CfgRoute>lambdaQuery().orderByAsc(CfgRoute::getId));
+        // 批量装配，避免逐条查目标表 / 消费状态（C1：把 O(n) 次查询降为常数次）
+        Map<Long, CfgTarget> targets = loadTargets(routes);
+        Map<Long, RtConsumerState> states = loadConsumerStates(routes);
         List<RouteSummaryDto> out = new ArrayList<>(routes.size());
         for (CfgRoute r : routes) {
-            out.add(toSummary(r));
+            out.add(RouteSummaries.build(r, targets.get(r.getTargetId()), states.get(r.getId())));
         }
         return out;
     }
@@ -80,12 +85,13 @@ public class ConfigService {
         CfgRoute route = requireRoute(routeId);
         CfgTarget target = requireTarget(route.getTargetId());
         CfgDatasource ds = datasourceMapper.selectById(target.getDatasourceId());
+        RtConsumerState state = consumerStateMapper.selectById(routeId);
 
         JsonNodeHolder holder = loadActiveContent(route);
         List<VersionSummaryDto> versions = listVersions(routeId);
 
         return new RouteDetailDto(
-                toSummary(route),
+                RouteSummaries.build(route, target, state),
                 new TargetDto(target.getId(), target.getName(), target.getDatasourceId(),
                         ds == null ? null : ds.getName(),
                         target.getSchemaName(), target.getTableName(),
@@ -214,16 +220,38 @@ public class ConfigService {
         return target;
     }
 
-    private RouteSummaryDto toSummary(CfgRoute route) {
-        CfgTarget target = targetMapper.selectById(route.getTargetId());
-        RtConsumerState state = consumerStateMapper.selectById(route.getId());
-        return new RouteSummaryDto(
-                route.getId(), route.getName(), route.getTopic(), route.getTag(),
-                route.getTargetId(),
-                target == null ? null : target.getSchemaName() + "." + target.getTableName(),
-                route.getActiveVersion(), route.getStatus(),
-                state == null ? null : state.getStatus(),
-                state == null ? null : state.getReason());
+    private Map<Long, CfgTarget> loadTargets(List<CfgRoute> routes) {
+        Set<Long> ids = new java.util.HashSet<>();
+        for (CfgRoute r : routes) {
+            if (r.getTargetId() != null) {
+                ids.add(r.getTargetId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, CfgTarget> out = new java.util.HashMap<>(ids.size());
+        for (CfgTarget t : targetMapper.selectBatchIds(ids)) {
+            out.put(t.getId(), t);
+        }
+        return out;
+    }
+
+    private Map<Long, RtConsumerState> loadConsumerStates(List<CfgRoute> routes) {
+        Set<Long> ids = new java.util.HashSet<>();
+        for (CfgRoute r : routes) {
+            if (r.getId() != null) {
+                ids.add(r.getId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, RtConsumerState> out = new java.util.HashMap<>(ids.size());
+        for (RtConsumerState s : consumerStateMapper.selectBatchIds(ids)) {
+            out.put(s.getRouteId(), s);
+        }
+        return out;
     }
 
     private JsonNodeHolder loadActiveContent(CfgRoute route) {
