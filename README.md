@@ -158,6 +158,13 @@ pwsh -File scripts/e2e-config-api.ps1     # Windows PowerShell 5.1 亦可
 校验被拦下 → 发布 → 激活 → 投递 → 落库（含枚举 / 时间戳 / 常量 / JSONPath 四种转换）→ ACK →
 删除保护 → 级联清理。
 
+**持续集成**：`.github/workflows/ci.yml` 在 push 到 `main` 及 PR 时跑两个 job ——
+
+| job | 命令 | 说明 |
+| --- | --- | --- |
+| `backend` | `mvn -B verify` | 集成测试用 runner 自带的 Docker 起 Testcontainers，无需外部 PG |
+| `frontend` | `pnpm install --frozen-lockfile && pnpm build` | 校验锁文件一致并产出 `dist/` |
+
 ---
 
 ## 可观测

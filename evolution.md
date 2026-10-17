@@ -268,6 +268,34 @@
     镜像较慢、`mvn test` 需要 Docker。
   - 回滚：删除基类与依赖，恢复六个测试类的 `@SpringBootTest @ActiveProfiles("dev")`。
 
+---
+
+## 2026-10-17 · D2 引入 CI
+
+- **背景**
+  - 仓库此前没有 `.github/`，也没有 CI：改动是否可回归完全靠本地手动 `mvn test`。
+
+- **改动**
+  - 新增 `.github/workflows/ci.yml`，push 到 `main` 与 PR 时触发，含 `concurrency`
+    （同分支旧运行自动取消）与 `workflow_dispatch`（可手动跑）：
+    - `backend`：Temurin JDK 21 + Maven 缓存 → `mvn -B --no-transfer-progress verify`
+      （`verify` 会跑测试并打 jar）；失败也上传 `surefire-reports` 便于定位。
+      D1 之后集成测试用 Testcontainers，runner 自带 Docker，不需要外部 PG。
+    - `frontend`：pnpm 12 + Node 22（缓存 `pnpm-lock.yaml`）→
+      `pnpm install --frozen-lockfile` → `pnpm build`。
+  - E1（Spotless / ESLint）尚未落地，workflow 里预留说明，待 E1 完成后再把格式检查接进来。
+
+- **验证**
+  - 本地按 workflow 原样跑：
+    - `mvn -B --no-transfer-progress verify` → **51/51 通过 + `BUILD SUCCESS`**（产 jar）；
+    - `pnpm install --frozen-lockfile && pnpm build` → 退出码 0，产出 `dist/`。
+  - `pnpm dlx js-yaml .github/workflows/ci.yml` 能正常解析（结构为 2 个 job）。
+
+- **影响与回滚**
+  - 只新增文件，不影响运行时；推送后 GitHub 上即可看到检查状态。
+  - 回滚：删除 `.github/workflows/ci.yml`。
+
+
 
 
 
