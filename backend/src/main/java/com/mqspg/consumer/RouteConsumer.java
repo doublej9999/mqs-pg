@@ -1,7 +1,9 @@
 package com.mqspg.consumer;
 
+import com.mqspg.common.logging.MdcScope;
 import com.mqspg.common.model.RouteConfig;
 import com.mqspg.config.registry.ConfigRegistry;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.MqsConsumer;
 import com.mqspg.mqs.spi.MqsMessage;
 import com.mqspg.writer.batch.BatchManager;
@@ -10,6 +12,7 @@ import com.mqspg.writer.batch.BatchResult;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.batch.MessageDisposition;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Duration;
@@ -44,6 +47,10 @@ public class RouteConsumer implements Runnable, AutoCloseable {
     private final PgHealthGate healthGate;
     private final JdbcTemplate probeJdbc;
     private final Duration probeInterval;
+    private final MqsMetrics metrics;
+
+    /** {@code route} 标签值，构造时算一次，避免在消息级热路径上反复 String.valueOf。 */
+    private final String routeTag;
 
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong acked = new AtomicLong();
@@ -62,7 +69,8 @@ public class RouteConsumer implements Runnable, AutoCloseable {
                          ConsumerStateRepository stateRepository,
                          PgHealthGate healthGate,
                          JdbcTemplate probeJdbc,
-                         Duration probeInterval) {
+                         Duration probeInterval,
+                         MqsMetrics metrics) {
         this.routeId = routeId;
         this.consumer = consumer;
         this.registry = registry;
@@ -72,10 +80,15 @@ public class RouteConsumer implements Runnable, AutoCloseable {
         this.healthGate = healthGate;
         this.probeJdbc = probeJdbc;
         this.probeInterval = probeInterval;
+        this.metrics = metrics;
+        this.routeTag = String.valueOf(routeId);
     }
 
     @Override
     public void run() {
+        // 消费线程专属单一路由：整条线程的生命周期内都把 routeId 放进 MDC，
+        // 后续所有日志（含 BatchManager / RetryService）自动携带该字段。
+        MDC.put(MdcScope.ROUTE_ID, routeTag);
         log.info("Consumer 启动: route={} pullSize={} batchSize={} flushInterval={} invisible={}",
                 routeId, batchProps.getPullSize(), batchProps.getSize(),
                 batchProps.getFlushInterval(), batchProps.getInvisibleDuration());
@@ -107,6 +120,7 @@ public class RouteConsumer implements Runnable, AutoCloseable {
                         buffer.add(new BufferedMessage(m, version, now));
                     }
                     received.addAndGet(pulled.size());
+                    metrics.count("mqspg.messages.received", pulled.size(), "route", routeTag);
                 }
 
                 if (shouldFlush(buffer, lastFlushNanos)) {
@@ -129,6 +143,7 @@ public class RouteConsumer implements Runnable, AutoCloseable {
             }
             consumer.close();
             log.info("Consumer 已停止: route={}", routeId);
+            MDC.remove(MdcScope.ROUTE_ID);
         }
     }
 
@@ -147,6 +162,7 @@ public class RouteConsumer implements Runnable, AutoCloseable {
         if (buffer.isEmpty()) {
             return;
         }
+        long startNanos = System.nanoTime();
         BatchResult result;
         try {
             result = batchManager.process(routeId, List.copyOf(buffer));
@@ -155,13 +171,19 @@ public class RouteConsumer implements Runnable, AutoCloseable {
             // 此时绝不能 ACK —— 让 MQ 重投是唯一安全的选择。
             log.error("批次处理抛出未预期异常，本批 {} 条均不 ACK: route={}", buffer.size(), routeId, e);
             noAck.addAndGet(buffer.size());
+            metrics.count("mqspg.messages.no_ack", buffer.size(), "route", routeTag);
+            metrics.count("mqspg.batches.failed", "route", routeTag);
             return;
         }
 
+        metrics.record("mqspg.batch.duration",
+                Duration.ofNanos(System.nanoTime() - startNanos), "route", routeTag);
         batches.incrementAndGet();
+        metrics.count("mqspg.batches.total", "route", routeTag);
         applyDispositions(result);
 
         if (result.aborted()) {
+            metrics.count("mqspg.batches.aborted", "route", routeTag);
             pause("PG 级故障: " + result.abortReason());
         } else {
             stateRepository.markSuccess(routeId);
@@ -171,19 +193,26 @@ public class RouteConsumer implements Runnable, AutoCloseable {
     /** ACK 的唯一执行点。 */
     private void applyDispositions(BatchResult result) {
         for (MessageDisposition d : result.dispositions()) {
+            String messageId = d.handle().messageId();
             if (!d.kind().shouldAck()) {
                 noAck.incrementAndGet();
-                log.warn("不 ACK（将等待 MQ 重新投递）: route={} message={} 原因={}",
-                        routeId, d.handle().messageId(), d.detail());
+                metrics.count("mqspg.messages.no_ack", "route", routeTag);
+                try (MdcScope ignored = MdcScope.open(null, messageId, null)) {
+                    log.warn("不 ACK（将等待 MQ 重新投递）: route={} message={} 原因={}",
+                            routeId, messageId, d.detail());
+                }
                 continue;
             }
             try {
                 consumer.ack(d.handle());
                 acked.incrementAndGet();
+                metrics.count("mqspg.messages.acked", "route", routeTag);
             } catch (RuntimeException e) {
                 // ACK 失败是安全的：消息会重投，幂等 Upsert 保证最终状态正确（PRD §28）
-                log.warn("ACK 失败，消息可能重复投递: route={} message={} 原因={}",
-                        routeId, d.handle().messageId(), e.getMessage());
+                try (MdcScope ignored = MdcScope.open(null, messageId, null)) {
+                    log.warn("ACK 失败，消息可能重复投递: route={} message={} 原因={}",
+                            routeId, messageId, e.getMessage());
+                }
             }
         }
         if (result.count(com.mqspg.writer.batch.Disposition.ACK_DEFERRED) > 0

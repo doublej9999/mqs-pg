@@ -21,6 +21,21 @@ public interface RtRetryTaskMapper extends BaseMapper<RtRetryTask> {
     List<RtRetryTask> claimDue(@Param("limit") int limit, @Param("leaseSeconds") long leaseSeconds);
 
     /**
+     * 幂等登记一条待重试任务（见 {@code RtRetryTaskMapper.xml}）。
+     *
+     * <p>与普通 {@code insert} 的区别：当同一 {@code (route_id, message_id)} 已存在
+     * 活跃任务（{@code PENDING}/{@code RUNNING}，即命中部分唯一索引 {@code uk_retry_active}）时，
+     * 不再抛唯一约束异常，而是刷新该行的调度时间与错误快照。
+     *
+     * <p>存在的意义：MQ 重复投递（ACK 丢失后的重投）会让同一条消息再次失败并再次入队，
+     * 若直接 insert 会撞唯一索引，导致调用方降级为"不 ACK"，从而"不 ACK → 重投 → 再撞"
+     * 的死循环。幂等入队把这种重复投递视为同一次失败。
+     *
+     * @return 任务主键（新建或被复用的活跃任务）
+     */
+    Long upsertActive(@Param("task") RtRetryTask task);
+
+    /**
      * 回收租约超时的任务，用于实例崩溃后的自愈。
      *
      * @return 被回收的任务数

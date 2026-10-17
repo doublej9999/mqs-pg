@@ -7,19 +7,24 @@ import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ErrorSeverity;
 import com.mqspg.common.error.ErrorStage;
 import com.mqspg.common.error.ProcessingException;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.MqsMessage;
 import com.mqspg.retry.entity.RtErrorRecord;
 import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtErrorRecordMapper;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 重试任务的持久化（ADR-02）。
@@ -40,6 +45,40 @@ public class RetryService {
     private final RtErrorRecordMapper errorRecordMapper;
     private final RetryProperties props;
     private final BackoffPolicy backoff;
+    private final MqsMetrics metrics;
+
+    /** 重试积压的 gauge 持有者；由定时任务刷新，抓取时不打 DB。 */
+    private final Map<String, AtomicLong> backlogGauges = new ConcurrentHashMap<>();
+
+    /**
+     * 注册积压指标 holder。
+     *
+     * <p>积压量是 DB 里的"当前状态"，用 gauge；但若让 gauge 直接去查库，
+     * 每次 Prometheus 抓取都会打一次 group by。这里改为定时把 {@link #summary()}
+     * 的结果写进 {@link AtomicLong}，gauge 只读内存。
+     */
+    @PostConstruct
+    void initBacklogMetrics() {
+        for (String status : List.of("PENDING", "RUNNING", "DLQ")) {
+            AtomicLong holder = new AtomicLong();
+            backlogGauges.put(status, holder);
+            metrics.gauge("mqspg.retry.backlog", holder, AtomicLong::doubleValue, "status", status);
+        }
+    }
+
+    @Scheduled(fixedDelayString = "${mqs-pg.metrics.refresh-interval:15s}")
+    public void refreshBacklogMetrics() {
+        try {
+            Map<String, Object> counts = summary();
+            backlogGauges.forEach((status, holder) -> {
+                Object v = counts.get(status);
+                holder.set(v instanceof Number n ? n.longValue() : 0L);
+            });
+        } catch (RuntimeException e) {
+            // 指标刷新失败不应影响主链路
+            log.debug("刷新重试积压指标失败: {}", e.getMessage());
+        }
+    }
 
     /**
      * 登记一条待重试任务。
@@ -77,10 +116,13 @@ public class RetryService {
         task.setCreatedAt(now);
         task.setUpdatedAt(now);
 
-        retryTaskMapper.insert(task);
-        log.info("已登记重试: route={} message={} attempt={}/{} code={} nextRetryAt={}",
-                routeId, message.messageId(), effectiveAttempt, maxAttempt, code, task.getNextRetryAt());
-        return task.getId();
+        // 幂等入队：若同一消息已有活跃重试任务（ACK 丢失导致的重投），
+        // 刷新它而不是撞唯一索引 —— 否则会陷入"不 ACK → 重投 → 再撞"的死循环。
+        Long id = retryTaskMapper.upsertActive(task);
+        task.setId(id);
+        log.info("已登记重试: id={} route={} message={} attempt={}/{} code={} nextRetryAt={}",
+                id, routeId, message.messageId(), effectiveAttempt, maxAttempt, code, task.getNextRetryAt());
+        return id;
     }
 
     /** 记录一条错误流水（可用于非终态与终态）。 */

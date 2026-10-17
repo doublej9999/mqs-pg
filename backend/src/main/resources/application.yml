@@ -66,6 +66,10 @@ logging:
   level:
     root: INFO
     com.mqspg: DEBUG
+  pattern:
+    # 关联字段走 MDC（见 com.mqspg.common.logging.MdcScope），采集器可按 routeId/messageId 索引。
+    # 无关联字段时打印为空，不产生噪声。
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} [route=%X{routeId:-} msg=%X{messageId:-} ver=%X{configVersion:-}] - %msg%n"
 
 # ---------------------------------------------------------------------------
 # 业务侧参数（对应 tech-design §7.1 / §10.4）

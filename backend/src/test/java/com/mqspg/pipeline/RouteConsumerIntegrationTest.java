@@ -4,6 +4,7 @@ import com.mqspg.config.registry.ConfigRegistry;
 import com.mqspg.consumer.ConsumerStateRepository;
 import com.mqspg.consumer.PgHealthGate;
 import com.mqspg.consumer.RouteConsumer;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.mock.MockMqsBroker;
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
@@ -68,6 +69,8 @@ class RouteConsumerIntegrationTest {
     @Autowired
     private TargetDataSourceRegistry dataSources;
     @Autowired
+    private MqsMetrics metrics;
+    @Autowired
     private JdbcTemplate jdbc;
 
     private RouteConsumer routeConsumer;
@@ -99,7 +102,7 @@ class RouteConsumerIntegrationTest {
                 new ConsumerSpec(ROUTE_ID, TOPIC, TAG, "loop-test-group", 10, Duration.ofSeconds(30)));
         routeConsumer = new RouteConsumer(
                 ROUTE_ID, consumer, registry, batchManager, batchProps,
-                stateRepository, healthGate, dataSources.jdbc(1L), Duration.ofMillis(100));
+                stateRepository, healthGate, dataSources.jdbc(1L), Duration.ofMillis(100), metrics);
         thread = new Thread(routeConsumer, "test-route-consumer");
         thread.setDaemon(true);
         thread.start();

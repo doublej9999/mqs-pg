@@ -3,6 +3,7 @@ package com.mqspg.writer;
 import com.mqspg.common.model.KeyTuple;
 import com.mqspg.common.model.MergeAction;
 import com.mqspg.common.model.RouteConfig;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
 import com.mqspg.writer.fold.FoldedRecord;
 import com.mqspg.writer.metadata.TargetMetadataReader;
@@ -49,6 +50,7 @@ public class PgWriter {
     private final TargetDataSourceRegistry dataSources;
     private final TargetMetadataReader metadataReader;
     private final MergeSqlBuilder sqlBuilder;
+    private final MqsMetrics metrics;
 
     @Value("${mqs-pg.batch.write-chunk-size:200}")
     private int writeChunkSize = 200;
@@ -132,6 +134,7 @@ public class PgWriter {
         if (chunk.size() == 1) {
             FoldedRecord f = chunk.get(0);
             failures.put(f.key(), "SQLSTATE %s: %s".formatted(sqlState(cause), rootMessage(cause)));
+            metrics.count("mqspg.write.rows.isolated", 1, "target", cfg.target().qualifiedTable());
             log.warn("行级写入失败（已隔离，将进入重试）: target={} key={} 关联消息数={} reason={}",
                     cfg.target().qualifiedTable(), f.key(), f.sources().size(), rootMessage(cause));
             return;

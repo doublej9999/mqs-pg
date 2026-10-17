@@ -1,6 +1,7 @@
 package com.mqspg.raw;
 
 import com.mqspg.common.persistence.JsonbTypeHandler;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.MqsMessage;
 import com.mqspg.writer.batch.BufferedMessage;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +50,7 @@ public class RawStore implements AutoCloseable {
 
     private final RawProperties props;
     private final JdbcTemplate jdbc;
+    private final MqsMetrics metrics;
 
     private final BlockingQueue<RawRecord> queue;
     private final List<Thread> workers = new ArrayList<>();
@@ -58,10 +60,13 @@ public class RawStore implements AutoCloseable {
     private final AtomicLong written = new AtomicLong();
     private final AtomicLong dropped = new AtomicLong();
 
-    public RawStore(RawProperties props, JdbcTemplate jdbc) {
+    public RawStore(RawProperties props, JdbcTemplate jdbc, MqsMetrics metrics) {
         this.props = props;
         this.jdbc = jdbc;
+        this.metrics = metrics;
         this.queue = new ArrayBlockingQueue<>(Math.max(1, props.getQueueCapacity()));
+        // 队列深度是"当前状态"而非累计值，用 gauge（拉取）而不是 counter。
+        metrics.gauge("mqspg.raw.queue.depth", this, r -> r.queueDepth());
         if (props.isEnabled()) {
             startWorkers();
         } else {
@@ -78,6 +83,7 @@ public class RawStore implements AutoCloseable {
             enqueued.incrementAndGet();
         } else {
             long n = dropped.incrementAndGet();
+            metrics.count("mqspg.raw.messages.dropped");
             // 只在首次和每 1000 次丢弃时告警，避免刷屏
             if (n == 1 || n % 1000 == 0) {
                 log.warn("原始留存队列已满，已累计丢弃 {} 条（消费主链路不受影响）", n);
@@ -202,6 +208,7 @@ public class RawStore implements AutoCloseable {
             }
         });
         written.addAndGet(batch.size());
+        metrics.count("mqspg.raw.messages.written", batch.size());
     }
 
     // ------------------------------------------------------------------

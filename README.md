@@ -153,6 +153,38 @@ pwsh -File scripts/e2e-config-api.ps1     # Windows PowerShell 5.1 亦可
 
 ---
 
+## 可观测
+
+Actuator 端点默认暴露 `health,info,metrics,prometheus`。
+
+**业务指标**（`/actuator/prometheus`，前缀 `mqspg_`）：
+
+| 指标 | 标签 | 含义 |
+| --- | --- | --- |
+| `mqspg_messages_received_total` | `route` | 拉取到的消息数 |
+| `mqspg_messages_acked_total` | `route` | 已 ACK 的消息数 |
+| `mqspg_messages_no_ack_total` | `route` | 未 ACK（等待 MQ 重投）的消息数 |
+| `mqspg_batches_total` / `_aborted` / `_failed` | `route` | 批次数 / PG 级故障中止 / 未预期异常 |
+| `mqspg_batch_duration_seconds` | `route` | 批次处理耗时 |
+| `mqspg_write_rows_isolated_total` | `target` | 二分隔离出的坏行数 |
+| `mqspg_raw_messages_written_total` / `_dropped_total` | — | 原始留存写入 / 队列满丢弃 |
+| `mqspg_raw_queue_depth` | — | 留存队列当前深度 |
+| `mqspg_retry_backlog` | `status` | 重试积压（PENDING / RUNNING / DLQ），每 15s 刷新 |
+| `mqspg_pg_health_open` | `datasource` | PG 健康闸门是否放行（1/0） |
+| `mqspg_pg_gate_closed_total` / `_opened_total` | `datasource` | 闸门关闭 / 恢复次数 |
+
+**业务健康**（`/actuator/health` 中的 `mqsPg` 组件）：
+
+- 任一数据源闸门关闭 → `DOWN`（消费已停）；
+- 重试积压（`PENDING + RUNNING`）超过 `mqs-pg.health.retry-backlog-threshold`（默认 10000）→ `OUT_OF_SERVICE`；
+- 原始留存丢弃率超过 `mqs-pg.health.raw-drop-ratio-threshold`（默认 0.1，
+  且样本 ≥ `mqs-pg.health.raw-drop-sample-min`，默认 1000）→ `OUT_OF_SERVICE`。
+
+**关联日志**：消费与重试入口把 `routeId` / `messageId` / `configVersion` 写入 MDC，
+控制台日志 pattern 输出 `[route= msg= ver=]`，采集器可按字段检索。
+
+---
+
 ## 目录结构
 
 ```text
@@ -198,7 +230,7 @@ mqs-pg/
 
 ---
 
-## 实现须知：七个已踩过的坑
+## 实现须知：八个已踩过的坑
 
 这几条都不会在**编译期**报错，而是以「静默不生效」或「运行时才炸」的形式出现。
 完整说明见 tech-design.md 附录 E。
@@ -243,6 +275,15 @@ mqs-pg/
    这里则是必须借它的类型处理器 —— 所以**要写 NULL 用 `UpdateWrapper`，
    要写 JSONB 用 `updateById`**。
 
+8. **重试表的「活跃任务」部分唯一索引会与 MQ 重投语义冲突**。
+   `uk_retry_active (route_id, message_id) WHERE status IN ('PENDING','RUNNING')`
+   只允许同一消息有一条活跃任务；但 MQ 的至少一次投递意味着同一条消息可能**再次到达**
+   （典型是 ACK 丢失）。若此时用普通 `insert` 登记重试，会撞唯一索引 → 调用方按约定
+   「不 ACK」→ MQ 重投 → 再撞，形成**活锁**。因此登记必须**幂等**：
+   用 `INSERT ... ON CONFLICT (route_id, message_id) WHERE status IN (...) DO UPDATE`
+   刷新既有的活跃任务（见 `RtRetryTaskMapper#upsertActive`）。
+   刷新时**不要**覆盖 `attempt` / `max_attempt`，否则重复投递会不断重置次数、永远到不了 DLQ。
+
 另有一条**实现红线**：`MergeSqlBuilder` 中只允许存在**带单调守卫**的
 `WHEN MATCHED`，绝不能补一个无守卫的兜底子句——那会让旧版本数据覆盖新数据，
 且 PostgreSQL 官方文档中 MERGE 的示例恰好就是这个反例，不可照抄。
@@ -263,10 +304,15 @@ mqs-pg/
 | 7 Raw Message 分区留存 + TTL 维护 | ✅ |
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
+| 10 优化：A 稳定性 / B 可观测性 / C 性能 / D 交付 / E 工程化 / F 前端 | 🚧 进行中 |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
 当前 `mvn test`：**51 个用例全部通过**（其中 14 个是阶段 9 新增的配置域写操作测试），
 `scripts/e2e-config-api.ps1` 端到端断言全部通过。
+
+优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)，
+每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
+当前进度：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志**已实现（详见 evolution.md）。
 
 ### 仍待接入的部分
 

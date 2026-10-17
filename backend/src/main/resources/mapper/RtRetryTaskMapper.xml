@@ -54,4 +54,38 @@
           AND lease_until &lt; now()
     </update>
 
+    <!--
+      幂等入队（里程碑 A1）。
+      命中部分唯一索引 uk_retry_active (route_id, message_id) WHERE status IN ('PENDING','RUNNING')
+      时改为刷新既有活跃任务，而不是抛唯一约束异常 —— 这样 MQ 重复投递不会把调用方
+      逼进"不 ACK → 重投 → 再撞索引"的死循环。
+
+      刻意**不覆盖** attempt / max_attempt / status / lease_until：
+        - attempt/max_attempt 属于重试次数账本，重复投递不应重置，否则永远到不了 DLQ；
+        - status 保留原值（可能是 RUNNING），避免把正在被调度器处理的任务打回 PENDING；
+        - lease_until 同上。
+      仅刷新"下一次调度时间 + 最近错误快照"。
+    -->
+    <select id="upsertActive" resultType="long">
+        INSERT INTO rt_retry_task
+            (route_id, config_version, message_id, topic, tag, payload,
+             error_stage, error_code, error_message, attempt, max_attempt,
+             next_retry_at, status, last_error_at, created_at, updated_at)
+        VALUES
+            (#{task.routeId}, #{task.configVersion}, #{task.messageId}, #{task.topic},
+             #{task.tag,jdbcType=VARCHAR}, #{task.payload,jdbcType=OTHER},
+             #{task.errorStage}, #{task.errorCode}, #{task.errorMessage,jdbcType=VARCHAR},
+             #{task.attempt}, #{task.maxAttempt},
+             #{task.nextRetryAt}, 'PENDING', #{task.lastErrorAt}, #{task.createdAt}, #{task.updatedAt})
+        ON CONFLICT (route_id, message_id) WHERE status IN ('PENDING', 'RUNNING')
+        DO UPDATE SET
+            next_retry_at = EXCLUDED.next_retry_at,
+            error_stage   = EXCLUDED.error_stage,
+            error_code    = EXCLUDED.error_code,
+            error_message = EXCLUDED.error_message,
+            last_error_at = EXCLUDED.last_error_at,
+            updated_at    = EXCLUDED.updated_at
+        RETURNING id
+    </select>
+
 </mapper>

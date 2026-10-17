@@ -2,6 +2,7 @@ package com.mqspg.writer.batch;
 
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
+import com.mqspg.common.logging.MdcScope;
 import com.mqspg.common.model.MergeAction;
 import com.mqspg.common.model.RouteConfig;
 import com.mqspg.common.model.TargetRow;
@@ -113,14 +114,16 @@ public class BatchManager {
         List<CandidateRecord> candidates = new ArrayList<>(group.size());
 
         for (BufferedMessage m : group) {
-            try {
-                TargetRow row = transformEngine.transform(cfg, m.handle().body());
-                candidates.add(new CandidateRecord(m, row));
-            } catch (ProcessingException e) {
-                handleTransformFailure(routeId, cfg, m, e, dispositions);
-            } catch (RuntimeException e) {
-                handleTransformFailure(routeId, cfg, m,
-                        new ProcessingException(ErrorCode.INTERNAL_ERROR, e.getMessage(), e), dispositions);
+            try (MdcScope ignored = MdcScope.open(null, m.handle().messageId(), m.configVersion())) {
+                try {
+                    TargetRow row = transformEngine.transform(cfg, m.handle().body());
+                    candidates.add(new CandidateRecord(m, row));
+                } catch (ProcessingException e) {
+                    handleTransformFailure(routeId, cfg, m, e, dispositions);
+                } catch (RuntimeException e) {
+                    handleTransformFailure(routeId, cfg, m,
+                            new ProcessingException(ErrorCode.INTERNAL_ERROR, e.getMessage(), e), dispositions);
+                }
             }
         }
 
@@ -205,14 +208,16 @@ public class BatchManager {
     private void handleRowFailure(long routeId, RouteConfig cfg, FoldedRecord f, String reason,
                                   List<MessageDisposition> out) {
         for (MessageRef ref : f.sources()) {
-            MqsMessage handle = ref.handle();
-            try {
-                retryService.scheduleDeferred(handle, routeId, ref.configVersion(), null, 1,
-                        new ProcessingException(ErrorCode.PG_CONSTRAINT_VIOLATION, reason));
-                out.add(MessageDisposition.ackDeferred(handle, "已落重试表: " + abbreviate(reason)));
-            } catch (RuntimeException e) {
-                log.error("登记重试任务失败，不 ACK: route={} message={}", routeId, ref.messageId(), e);
-                out.add(MessageDisposition.noAck(handle, "重试任务登记失败: " + e.getMessage()));
+            try (MdcScope ignored = MdcScope.open(null, ref.messageId(), ref.configVersion())) {
+                MqsMessage handle = ref.handle();
+                try {
+                    retryService.scheduleDeferred(handle, routeId, ref.configVersion(), null, 1,
+                            new ProcessingException(ErrorCode.PG_CONSTRAINT_VIOLATION, reason));
+                    out.add(MessageDisposition.ackDeferred(handle, "已落重试表: " + abbreviate(reason)));
+                } catch (RuntimeException e) {
+                    log.error("登记重试任务失败，不 ACK: route={} message={}", routeId, ref.messageId(), e);
+                    out.add(MessageDisposition.noAck(handle, "重试任务登记失败: " + e.getMessage()));
+                }
             }
         }
     }

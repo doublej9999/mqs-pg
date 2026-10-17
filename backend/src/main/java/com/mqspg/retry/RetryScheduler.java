@@ -1,6 +1,7 @@
 package com.mqspg.retry;
 
 import com.mqspg.common.error.ErrorStage;
+import com.mqspg.common.logging.MdcScope;
 import com.mqspg.mqs.spi.FailureMeta;
 import com.mqspg.mqs.spi.MqsDeadLetterSink;
 import com.mqspg.retry.entity.RtRetryTask;
@@ -64,6 +65,15 @@ public class RetryScheduler {
 
     /** 处理单个任务。包可见，便于单测直接调用。 */
     void processOne(RtRetryTask task) {
+        // 重试重放是一个独立的处理入口：把任务绑定的 route/message/version 放进 MDC，
+        // 让 RetryReplayer / RetryService 的日志都能按这几个字段检索。
+        try (MdcScope ignored = MdcScope.open(
+                String.valueOf(task.getRouteId()), task.getMessageId(), task.getConfigVersion())) {
+            processOneInScope(task);
+        }
+    }
+
+    private void processOneInScope(RtRetryTask task) {
         ReplayOutcome outcome;
         try {
             outcome = replayer.replay(task);

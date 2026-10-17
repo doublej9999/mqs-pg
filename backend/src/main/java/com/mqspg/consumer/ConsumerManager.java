@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.config.entity.CfgRoute;
 import com.mqspg.config.mapper.CfgRouteMapper;
 import com.mqspg.config.registry.ConfigRegistry;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
 import com.mqspg.mqs.spi.MqsConsumerFactory;
@@ -45,6 +46,7 @@ public class ConsumerManager {
     private final ConsumerStateRepository stateRepository;
     private final PgHealthGate healthGate;
     private final TargetDataSourceRegistry dataSources;
+    private final MqsMetrics metrics;
 
     @Value("${mqs-pg.consumer.auto-start:true}")
     private boolean autoStart;
@@ -112,7 +114,7 @@ public class ConsumerManager {
 
         RouteConsumer routeConsumer = new RouteConsumer(
                 routeId, consumer, registry, batchManager, batchProps,
-                stateRepository, healthGate, probeJdbc, probeInterval);
+                stateRepository, healthGate, probeJdbc, probeInterval, metrics);
 
         consumers.put(routeId, routeConsumer);
         stateRepository.markRunning(routeId, route.getActiveVersion());
