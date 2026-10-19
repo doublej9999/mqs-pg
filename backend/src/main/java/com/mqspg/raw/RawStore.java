@@ -137,7 +137,8 @@ public class RawStore implements AutoCloseable {
 
     private void startWorkers() {
         for (int i = 0; i < Math.max(1, props.getWorkerCount()); i++) {
-            Thread t = new Thread(this::runWorker, "raw-store-" + i);
+            Thread t = new Thread(this::runWorker,
+                    "raw-store-" + Integer.toHexString(System.identityHashCode(this)) + "-" + i);
             t.setDaemon(true);
             workers.add(t);
             t.start();
@@ -148,7 +149,7 @@ public class RawStore implements AutoCloseable {
 
     private void runWorker() {
         List<RawRecord> batch = new ArrayList<>(props.getBatchSize());
-        while (running) {
+        while (running || !queue.isEmpty()) {
             try {
                 RawRecord first = queue.poll(props.getFlushInterval().toMillis(), TimeUnit.MILLISECONDS);
                 if (first != null) {
@@ -160,7 +161,11 @@ public class RawStore implements AutoCloseable {
                     batch.clear();
                 }
             } catch (InterruptedException e) {
+                if (!running) {
+                    continue;
+                }
                 Thread.currentThread().interrupt();
+                log.warn("原始留存工作线程被中断，剩余队列记录数={}", queue.size());
                 return;
             } catch (RuntimeException e) {
                 // 留存写入失败不能影响主链路，也不能杀死工作线程
@@ -168,17 +173,7 @@ public class RawStore implements AutoCloseable {
                 batch.clear();
             }
         }
-        // 停机前把剩余的清空
-        try {
-            queue.drainTo(batch, props.getBatchSize());
-            while (!batch.isEmpty()) {
-                flush(batch);
-                batch.clear();
-                queue.drainTo(batch, props.getBatchSize());
-            }
-        } catch (RuntimeException e) {
-            log.error("停机时清空留存队列失败", e);
-        }
+        log.info("原始留存工作线程已排空并停止");
     }
 
     private void flush(List<RawRecord> batch) {
@@ -260,12 +255,14 @@ public class RawStore implements AutoCloseable {
         }
         for (Thread t : workers) {
             try {
-                t.join(5000);
+                t.join();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                log.warn("等待原始留存工作线程停止时被中断，剩余队列记录数={}", queue.size());
                 return;
             }
         }
+        log.info("原始留存已停止: 队列剩余 {} 条", queue.size());
     }
 
     /** 一条待留存的原始消息。{@code payloadJson} 与 {@code payloadRaw} 至多有一个非空。 */

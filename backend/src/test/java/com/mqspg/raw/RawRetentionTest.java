@@ -1,6 +1,7 @@
 package com.mqspg.raw;
 
 import com.mqspg.mqs.FakeMessage;
+import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BufferedMessage;
 import org.junit.jupiter.api.AfterEach;
@@ -12,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -49,6 +51,8 @@ class RawRetentionTest extends AbstractPgIntegrationTest {
     private RawPartitionMaintenance maintenance;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private MqsMetrics metrics;
 
     private LocalDate today;
 
@@ -234,6 +238,46 @@ class RawRetentionTest extends AbstractPgIntegrationTest {
 
         assertEquals(before + 10, rawStore.enqueuedCount());
         assertEquals(0, rawStore.droppedCount(), "未溢出时不应有丢弃");
+    }
+
+    @Test
+    @DisplayName("关闭时唤醒正在等待的 worker 并排空已入队记录")
+    void closeDrainsQueueWhileWorkerIsWaiting() {
+        RawProperties props = new RawProperties();
+        props.setWorkerCount(1);
+        props.setBatchSize(200);
+        props.setFlushInterval(Duration.ofSeconds(30));
+        RawStore store = new RawStore(props, jdbc, metrics);
+        try {
+            awaitWorkerWaiting("raw-store-" + Integer.toHexString(System.identityHashCode(store)) + "-0");
+            Instant now = Instant.now();
+            for (int i = 0; i < 20; i++) {
+                store.offer(new RawStore.RawRecord(
+                        "rawt-close-" + i, 1L, "order-topic", "order.updated", now, 1, "{}", null));
+            }
+
+            store.close();
+
+            assertEquals(20L, jdbc.queryForObject(
+                    "SELECT count(*) FROM raw_message WHERE message_id LIKE 'rawt-close-%'", Long.class));
+        } finally {
+            store.close();
+        }
+    }
+
+    private static void awaitWorkerWaiting(String threadName) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            Thread worker = Thread.getAllStackTraces().keySet().stream()
+                    .filter(t -> threadName.equals(t.getName()))
+                    .findFirst()
+                    .orElse(null);
+            if (worker != null && worker.getState() == Thread.State.TIMED_WAITING) {
+                return;
+            }
+            Thread.yield();
+        }
+        throw new AssertionError("留存 worker 未进入队列等待状态: " + threadName);
     }
 
     @Test
