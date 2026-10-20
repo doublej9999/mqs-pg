@@ -15,6 +15,7 @@ import com.mqspg.config.entity.CfgTarget;
 import com.mqspg.config.registry.RouteConfigAssembler;
 import com.mqspg.transform.ExpressionEvaluator;
 import com.mqspg.transform.JsonPaths;
+import com.mqspg.transform.TransformEngine;
 import com.mqspg.writer.metadata.ColumnMeta;
 import com.mqspg.writer.metadata.TargetMetadataReader;
 import com.mqspg.writer.metadata.TargetTableMeta;
@@ -85,6 +86,7 @@ public class ConfigValidator {
     private final JsonPaths jsonPaths;
     private final ExpressionEvaluator expressionEvaluator;
     private final RouteConfigAssembler assembler;
+    private final TransformEngine transformEngine;
 
     public ValidationResultDto validate(CfgRoute route, CfgTarget target, JsonNode content) {
         List<ValidationIssueDto> issues = new ArrayList<>();
@@ -106,6 +108,7 @@ public class ConfigValidator {
         }
 
         validateStrategy(content, issues);
+        validateJslt(content, issues);
 
         List<MappingDef> mappings = assembler.mappings(content);
         if (mappings.isEmpty()) {
@@ -143,6 +146,37 @@ public class ConfigValidator {
         if (!KNOWN_STRATEGIES.contains(raw.trim().toUpperCase(Locale.ROOT))) {
             issues.add(ValidationIssueDto.error("mappingStrategy",
                     "未知的映射策略: %s（可选 %s）".formatted(raw, KNOWN_STRATEGIES)));
+        }
+    }
+
+    /**
+     * JSLT 语法预校验。
+     *
+     * <p><b>为什么必须在这里做</b>：`TransformEngine#validateJslt` 早就写好了，
+     * 注释也写着「供配置发布时做 JSLT 语法预校验」，但**全仓没有任何调用者** ——
+     * 于是一个拼错的 JSLT 能顺利通过发布校验、上线，直到第一条真实消息到达时
+     * 才以 {@code JSLT_ERROR} 进 DLQ。「发布前拦截」的设计目标没达成，
+     * 而且坏配置已经生效了。
+     *
+     * <p>JSLT 编译是毫秒级开销，只发生在 publish/validate 路径，不进热路径；
+     * 而且编译结果进 `TransformEngine` 的缓存，运行时不会重复编译。
+     */
+    private void validateJslt(JsonNode content, List<ValidationIssueDto> issues) {
+        String script = JsonNodes.text(content, "jslt");
+        if (script == null || script.isBlank()) {
+            return;
+        }
+        try {
+            transformEngine.validateJslt(script);
+        } catch (ProcessingException e) {
+            // field 用 "jslt"：页面据此把错误定位到 JSLT 编辑框
+            issues.add(ValidationIssueDto.error("jslt", e.getMessage()));
+        } catch (RuntimeException e) {
+            // 编译器抛的非 ProcessingException 异常：同样是脚本本身的问题，
+            // 但措辞上不要断言是语法错误（可能是编译器内部状态），所以降级为 WARN，
+            // 符合本类「宁漏不误」的原则
+            issues.add(ValidationIssueDto.warn("jslt",
+                    "JSLT 脚本预校验未能完成: " + rootMessage(e)));
         }
     }
 

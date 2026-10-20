@@ -25,6 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -286,6 +287,43 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         // 发布同样被拦下，且不改变状态
         ValidationResultDto publish = admin.publishVersion(route.id(), draft.version());
         assertFalse(publish.valid());
+        assertEquals("DRAFT", jdbc.queryForObject(
+                "SELECT status FROM cfg_version WHERE route_id = ? AND version = ?",
+                String.class, route.id(), draft.version()));
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    @Test
+    @DisplayName("JSLT 语法错误在发布时被拦下，而不是等第一条消息进 DLQ")
+    void publishRejectsBrokenJslt() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-jslt", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-jslt", ds.id()));
+        RouteSummaryDto route = admin.createRoute(new RouteRequest(
+                PREFIX + "route-jslt", TOPIC + "jslt", TAG, target.id()));
+
+        // 故意写坏：JSLT 不是 JSON，少了闭合括号，编译器必然报错
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("mappingStrategy", "EXACT");
+        content.put("jslt", "{\"a\": .b");
+        content.put("mappings", List.of(Map.of(
+                "target", "id",
+                "source", "$.id",
+                "transform", Map.of("type", "long"))));
+
+        DraftDto draft = admin.saveDraft(route.id(), new DraftRequest(content, "坏 JSLT"));
+
+        // 上一版 validateJslt 是死代码（全仓零调用者），坏脚本能一路通过发布、
+        // 上线，直到第一条真实消息到达才以 JSLT_ERROR 进 DLQ
+        ValidationResultDto publish = admin.publishVersion(route.id(), draft.version());
+        assertFalse(publish.valid(), () -> "坏 JSLT 应阻止发布: " + publish.issues());
+        assertTrue(publish.issues().stream().anyMatch(i ->
+                        "jslt".equals(i.field()) && "ERROR".equals(i.severity())),
+                () -> "应报 jslt 字段错误: " + publish.issues());
+
+        // 且版本状态没变 —— 拦下就是拦下，不能「报错了但还是发布了」
         assertEquals("DRAFT", jdbc.queryForObject(
                 "SELECT status FROM cfg_version WHERE route_id = ? AND version = ?",
                 String.class, route.id(), draft.version()));
