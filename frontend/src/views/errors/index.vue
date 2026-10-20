@@ -1,5 +1,14 @@
 <template>
   <div>
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      :title="`加载失败：${loadError}`"
+      description="下面的表格已被清空，不是「没有数据」。请检查后端是否可达后重试。"
+    />
     <el-card class="page-card">
       <div class="page-toolbar">
         <el-select v-model="query.isFinal" placeholder="全部" clearable style="width: 160px" @change="onFilterChange">
@@ -77,6 +86,7 @@ import { getErrorStages } from '@/api/meta'
 const stages = ref([])
 
 const loading = ref(false)
+const loadError = ref('')
 const rows = ref([])
 const total = ref(0)
 const query = ref({ isFinal: undefined, errorStage: '', messageId: '', page: 1, limit: 50 })
@@ -102,6 +112,14 @@ async function load() {
     })
     rows.value = data?.items || []
     total.value = data?.total || 0
+    loadError.value = ''
+  } catch (e) {
+    // K7：没有 catch 时，后端不可达表现为「没有数据」而不是「加载失败」——
+    // 与「这条路由确实没有错误流水」长得一模一样，让人误判。
+    // 明确清空列表并置错误态：宁可显示「加载失败」，也不展示过期数据。
+    rows.value = []
+    total.value = 0
+    loadError.value = e?.message || '加载失败'
   } finally {
     loading.value = false
   }

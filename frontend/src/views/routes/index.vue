@@ -1,5 +1,14 @@
 <template>
   <div>
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      :title="`加载失败：${loadError}`"
+      description="表格已被清空，不是「没有数据」。请检查后端是否可达后重试。"
+    />
     <el-card class="page-card">
       <div class="page-toolbar">
         <span class="text-muted">
@@ -428,6 +437,7 @@ const transformTypes = [
 ]
 
 const loading = ref(false)
+const loadError = ref('')
 const rows = ref([])
 const datasources = ref([])
 
@@ -503,6 +513,12 @@ async function load() {
   loading.value = true
   try {
     rows.value = (await listRoutes()) || []
+    loadError.value = ''
+  } catch (e) {
+    // K7：失败要说出来。没有 catch 时后端不可达表现为「没有任何路由」，
+    // 运维很容易误以为配置被清了。
+    rows.value = []
+    loadError.value = e?.message || '加载失败'
   } finally {
     loading.value = false
   }

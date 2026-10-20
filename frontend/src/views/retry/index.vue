@@ -1,5 +1,14 @@
 <template>
   <div>
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      :title="`加载失败：${loadError}`"
+      description="任务列表已被清空，不是「没有待重试任务」。请检查后端是否可达后重试。"
+    />
     <el-card class="page-card">
       <div class="page-toolbar">
         <el-select v-model="query.status" placeholder="全部状态" clearable style="width: 150px" @change="load">
@@ -112,6 +121,7 @@ import { confirmAction } from '@/utils/confirm'
 const statuses = ['PENDING', 'RUNNING', 'SUCCEEDED', 'DLQ', 'CANCELLED']
 
 const loading = ref(false)
+const loadError = ref('')
 const tasks = ref([])
 const summary = ref({})
 const query = ref({ status: '', limit: 100 })
@@ -148,12 +158,23 @@ function tagType(status) {
 async function load() {
   loading.value = true
   try {
-    const [list, sum] = await Promise.all([
+    // K7：用 allSettled 而不是 all —— 任一请求失败时，另一个已成功的数据
+    // 不该被一起丢掉（如摘要取到了但列表超时，仍然应该显示摘要）。
+    const [list, sum] = await Promise.allSettled([
       listRetry({ status: query.value.status || undefined, limit: query.value.limit }),
       retrySummary()
     ])
-    tasks.value = list || []
-    summary.value = sum || {}
+    if (list.status === 'fulfilled') {
+      tasks.value = list.value || []
+      loadError.value = ''
+    } else {
+      // 列表失败：清空并明确报错，不要留着上一次的结果让人误以为是当前状态
+      tasks.value = []
+      loadError.value = list.reason?.message || '列表加载失败'
+    }
+    if (sum.status === 'fulfilled') {
+      summary.value = sum.value || {}
+    }
   } finally {
     loading.value = false
   }

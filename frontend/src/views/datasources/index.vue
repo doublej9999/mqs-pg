@@ -1,5 +1,14 @@
 <template>
   <div>
+    <el-alert
+      v-if="loadError"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      :title="`加载失败：${loadError}`"
+      description="表格已被清空，不是「没有数据」。请检查后端是否可达后重试。"
+    />
     <el-card class="page-card">
       <div class="page-toolbar">
         <span class="text-muted">
@@ -117,6 +126,7 @@ import {
 } from '@/api/datasources'
 
 const loading = ref(false)
+const loadError = ref('')
 const rows = ref([])
 
 const dialogVisible = ref(false)
@@ -147,6 +157,11 @@ async function load() {
   loading.value = true
   try {
     rows.value = (await listDatasources()) || []
+    loadError.value = ''
+  } catch (e) {
+    // K7：同上，失败要显式说出来而不是呈现为空表
+    rows.value = []
+    loadError.value = e?.message || '加载失败'
   } finally {
     loading.value = false
   }
