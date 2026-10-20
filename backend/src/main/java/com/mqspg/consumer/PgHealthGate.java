@@ -42,23 +42,23 @@ public class PgHealthGate {
     }
 
     /** 是否允许继续消费。未知数据源默认放行（首次写入会自然暴露问题）。 */
-    public boolean isOpen(Long datasourceId) {
+    public boolean isOpen(long datasourceId) {
         State s = states.get(datasourceId);
         return s == null || s.open;
     }
 
-    private double openValue(Long datasourceId) {
+    private double openValue(long datasourceId) {
         return isOpen(datasourceId) ? 1.0 : 0.0;
     }
 
-    private void ensureGauge(Long datasourceId) {
-        if (datasourceId != null && gauged.add(datasourceId)) {
+    private void ensureGauge(long datasourceId) {
+        if (gauged.add(datasourceId)) {
             metrics.gauge("mqspg.pg.health.open", datasourceId, this::openValue,
                     "datasource", String.valueOf(datasourceId));
         }
     }
 
-    public void recordSuccess(Long datasourceId) {
+    public void recordSuccess(long datasourceId) {
         ensureGauge(datasourceId);
         State s = states.computeIfAbsent(datasourceId, k -> new State());
         synchronized (s) {
@@ -74,7 +74,7 @@ public class PgHealthGate {
         }
     }
 
-    public void recordFailure(Long datasourceId, Throwable cause) {
+    public void recordFailure(long datasourceId, Throwable cause) {
         ensureGauge(datasourceId);
         State s = states.computeIfAbsent(datasourceId, k -> new State());
         synchronized (s) {
@@ -91,7 +91,7 @@ public class PgHealthGate {
     }
 
     /** 最近一次失败原因，用于写入 rt_consumer_state.reason。 */
-    public String lastError(Long datasourceId) {
+    public String lastError(long datasourceId) {
         State s = states.get(datasourceId);
         if (s == null) {
             return null;
@@ -101,7 +101,7 @@ public class PgHealthGate {
         }
     }
 
-    public void reset(Long datasourceId) {
+    public void reset(long datasourceId) {
         states.remove(datasourceId);
     }
 

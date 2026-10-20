@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.config.entity.CfgRoute;
 import com.mqspg.config.mapper.CfgRouteMapper;
 import com.mqspg.config.registry.ConfigRegistry;
+import com.mqspg.common.model.RouteConfig;
 import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
@@ -97,19 +98,30 @@ public class ConsumerManager {
 
         MqsConsumer consumer = consumerFactory.create(spec);
 
-        // 探测用的连接：取该路由目标库
-        JdbcTemplate probeJdbc = null;
-        var cfg = registry.get(routeId, route.getActiveVersion());
-        if (cfg != null) {
-            try {
-                probeJdbc = dataSources.jdbc(cfg.target().datasourceId());
-            } catch (RuntimeException e) {
-                log.error("目标数据源不可用，Consumer 将以暂停状态启动: route={}", routeId, e);
+        // 探测用的连接：取该路由目标库。
+        //
+        // 拿不到就**不提交消费者**，只把状态置 PAUSED 并留下可读原因。
+        // 原来这里兜底成 `new JdbcTemplate()`（没有 DataSource）—— 那是个
+        // 「必然失败的探测器」：每次 tryRecover 都抛 IllegalStateException，
+        // 闸门永远记失败、永远恢复不了，而线程还占着。
+        // 交给 H1 的注册表对账 + 闸门恢复去重新拉起更干净。
+        JdbcTemplate probeJdbc;
+        RouteConfig cfg;
+        try {
+            cfg = registry.get(routeId, route.getActiveVersion());
+            if (cfg == null) {
+                stateRepository.markPaused(routeId, "配置尚未装配，等待下次对账重新拉起",
+                        route.getActiveVersion());
+                log.warn("路由 {} 的配置版本 {} 尚未装配，暂不提交消费者", routeId, route.getActiveVersion());
+                return;
             }
-        }
-        if (probeJdbc == null) {
-            // 数据源不可用时用一个必然失败的探测，让健康闸门负责暂停/恢复
-            probeJdbc = new JdbcTemplate();
+            probeJdbc = dataSources.jdbc(cfg.target().datasourceId());
+        } catch (RuntimeException e) {
+            // 原因要可读：页面上的「暂停原因」直接取自这里
+            stateRepository.markPaused(routeId, "目标数据源不可用，等待恢复后自动拉起",
+                    route.getActiveVersion());
+            log.error("目标数据源不可用，暂不提交消费者: route={} 原因={}", routeId, e.getMessage(), e);
+            return;
         }
 
         RouteConsumer routeConsumer = new RouteConsumer(

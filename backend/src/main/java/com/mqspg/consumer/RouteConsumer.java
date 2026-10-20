@@ -256,9 +256,24 @@ public class RouteConsumer implements Runnable, AutoCloseable {
         log.error("Consumer 已暂停: route={} 原因={}", routeId, reason);
     }
 
-    private Long datasourceId() {
+    /**
+     * 当前绑定配置的目标数据源 id；**拿不到时返回 -1 而不是 null**。
+     *
+     * <p>为什么不能返回 null：这个值会传给 {@link PgHealthGate}，而后者内部是
+     * {@code ConcurrentHashMap.computeIfAbsent} —— key 为 null 会抛 NPE。
+     * 更糟的是调用点在 {@code tryRecover} 的 catch 块里：
+     * NPE 会从 catch 块逃出去，被消费循环外层的 {@code catch (Throwable)} 接住，
+     * 结果是**消费线程永久退出**、只留一条 ERROR 日志。
+     * 概率不高，但后果是「静默停一个路由」，属于最不该留的那种边界。
+     *
+     * <p>用 -1 表示「未知数据源」：闸门对它按「未知默认放行」处理，
+     * 不会污染真实数据源的计数，也不会让线程死掉。
+     */
+    private long datasourceId() {
         RouteConfig cfg = registry.active(routeId);
-        return cfg == null ? null : cfg.target().datasourceId();
+        return cfg == null || cfg.target() == null || cfg.target().datasourceId() == null
+                ? -1L
+                : cfg.target().datasourceId();
     }
 
     private static Duration shorter(Duration d) {

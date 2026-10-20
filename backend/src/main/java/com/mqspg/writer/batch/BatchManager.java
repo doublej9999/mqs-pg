@@ -134,7 +134,10 @@ public class BatchManager {
         List<FoldedRecord> folded = folder.fold(candidates, cfg.upsertKeys(), cfg.updateTimeField());
         MergeResult merge = writer.write(cfg, folded);
 
-        Long datasourceId = cfg.target().datasourceId();
+        // 用 -1 兜住 null：闸门的 key 是 ConcurrentHashMap 的 key，null 会抛 NPE，
+        // 而这段代码在批次处理路径上，NPE 会一路变成「PG 级故障」的误判。
+        // 正常不会走到这里（target 的 datasource_id 是 NOT NULL），但拆箱 NPE 的代价太高。
+        long datasourceId = cfg.target().datasourceId() == null ? -1L : cfg.target().datasourceId();
         if (merge.aborted()) {
             healthGate.recordFailure(datasourceId, merge.cause());
             // 中止：这一组里**所有**消息都不 ACK，让 MQ 重新投递
