@@ -486,8 +486,15 @@ public class ConfigAdminService {
         ValidationResultDto result =
                 validator.validate(route, targetMapper.selectById(route.getTargetId()), v.getContent());
         if (!result.valid()) {
-            log.warn("版本发布校验未通过: route={} version={} 问题数={}",
-                    routeId, version, result.issues().size());
+            // 只记「问题数」等于让人拿着一个数字去猜是哪一列错了。
+            // 这里把前 5 条的 field + message 一并记下 —— 绝大多数配置只有一两个问题，
+            // 截断只是为了防止一条坏配置刷出几百行日志。
+            String details = result.issues().stream()
+                    .limit(5)
+                    .map(i -> "%s: %s".formatted(i.field(), i.message()))
+                    .collect(java.util.stream.Collectors.joining("; "));
+            log.warn("版本发布校验未通过: route={} version={} 问题数={} 明细=[{}]",
+                    routeId, version, result.issues().size(), details);
             return result;
         }
         // 条件更新：状态必须仍是我们校验时读到的那个。

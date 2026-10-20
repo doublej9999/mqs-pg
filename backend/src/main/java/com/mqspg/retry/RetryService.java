@@ -81,8 +81,12 @@ public class RetryService {
             });
             lastRefreshAt.set(OffsetDateTime.now());
         } catch (RuntimeException e) {
-            // 指标刷新失败不应影响主链路
-            log.debug("刷新重试积压指标失败: {}", e.getMessage());
+            // 原来是 log.debug —— 生产默认 INFO 下等于**完全静默**。
+            // 指标刷新失败本身不致命（主链路不受影响），但它意味着 Prometheus 上的
+            // 积压曲线停在旧值、健康检查的 retryBacklog 会标 stale，
+            // 这是必须能被发现的退化，所以提到 warn 并计数。
+            log.warn("刷新重试积压指标失败: {}", e.getMessage());
+            metrics.count("mqspg.metrics.refresh.failed", "metric", "retry.backlog");
         }
     }
 
