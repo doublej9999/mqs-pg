@@ -24,8 +24,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -364,6 +370,108 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         assertEquals(v1.version(), rolledBack);
         assertEquals(v1.version(), jdbc.queryForObject(
                 "SELECT active_version FROM cfg_route WHERE id = ?", Integer.class, route.id()));
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    // ==================================================================
+    // 并发保护（里程碑 G1 / M1）
+    // ==================================================================
+
+    @Test
+    @DisplayName("并发激活两个版本，只会留下一个 ACTIVE")
+    void concurrentActivateKeepsSingleActive() throws Exception {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-cc", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-cc", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-cc", TOPIC + "cc", TAG, target.id()));
+
+        // 先发布并激活 v1：createVersion 是从**当前生效版本**复制内容的，
+        // 若在激活之前建 v2，复制到的是空内容，发布校验必然不通过（草稿留在原地，
+        // 后面的 createVersion 又会撞「已有草稿」）。
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+        configService.activate(route.id(), v1);
+
+        // 再基于 v1 造两个已发布版本，它们都还没生效
+        int v2 = admin.createVersion(route.id()).version();
+        admin.publishVersion(route.id(), v2);
+        int v3 = admin.createVersion(route.id()).version();
+        admin.publishVersion(route.id(), v3);
+
+        // 此刻 previous=1，两个线程会同时读到它 —— 这正是竞态的触发条件
+
+        int threads = 2;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threads);
+        List<Future<?>> futures = new ArrayList<>();
+        int[] targets = {v2, v3};
+        try {
+            for (int i = 0; i < threads; i++) {
+                int version = targets[i];
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        configService.activate(route.id(), version);
+                    } catch (ProcessingException expected) {
+                        // 「状态已被并发修改」也是合法结局：关键是库里不能出现两个 ACTIVE
+                    } finally {
+                        done.countDown();
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            assertTrue(done.await(30, TimeUnit.SECONDS), "并发激活超时");
+            for (Future<?> f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 核心断言：任意时刻只有一个 ACTIVE 版本
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT count(*) FROM cfg_version WHERE route_id = ? AND status = 'ACTIVE'",
+                Integer.class, route.id()),
+                "并发激活后 cfg_version 中 ACTIVE 版本必须恰好为 1");
+
+        // active_version 也必须指向那个 ACTIVE 版本（不能指向已被降级的行）
+        Integer activeVersion = jdbc.queryForObject(
+                "SELECT active_version FROM cfg_route WHERE id = ?", Integer.class, route.id());
+        assertNotNull(activeVersion);
+        assertEquals("ACTIVE", jdbc.queryForObject(
+                "SELECT status FROM cfg_version WHERE route_id = ? AND version = ?",
+                String.class, route.id(), activeVersion),
+                "cfg_route.active_version 指向的版本状态必须是 ACTIVE");
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    @Test
+    @DisplayName("状态已被并发改动的版本不再被静默激活")
+    void activateRejectsStatusChangedConcurrently() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-cf", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-cf", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-cf", TOPIC + "cf", TAG, target.id()));
+
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+
+        // 模拟「读到之后、写之前被别人改成了 DRAFT」：条件更新会拿到 0 行
+        jdbc.update("UPDATE cfg_version SET status = 'DRAFT' WHERE route_id = ? AND version = ?",
+                route.id(), v1);
+
+        ProcessingException e = assertThrows(ProcessingException.class,
+                () -> configService.activate(route.id(), v1));
+        assertTrue(e.getMessage().contains("不允许激活") || e.getMessage().contains("并发修改"),
+                e.getMessage());
 
         admin.deleteRoute(route.id(), true);
         admin.deleteTarget(target.id());

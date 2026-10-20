@@ -495,11 +495,15 @@ public class ConfigAdminService {
     /**
      * 回滚到当前生效版本之前最近的一个可激活版本。
      *
+     * <p>先在路由行上加锁再挑候选：否则「挑出 v2 → 交给 activate」这两步之间，
+     * v2 可能被删或被并发改成 DRAFT，最终报的却是「配置版本不存在」——
+     * 从用户视角看像是自己点错了版本。
+     *
      * @return 被激活的版本号
      */
     @Transactional
     public int rollback(long routeId) {
-        CfgRoute route = requireRoute(routeId);
+        CfgRoute route = configService.requireRouteForUpdate(routeId);
         Integer current = route.getActiveVersion();
         if (current == null) {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING, "该路由没有生效版本，无法回滚");
@@ -514,7 +518,8 @@ public class ConfigAdminService {
         }
         candidates.sort(Comparator.comparing(CfgVersion::getVersion).reversed());
         int target = candidates.get(0).getVersion();
-        // 复用 activate：它会处理旧版本降级、状态行与 AFTER_COMMIT 事件
+        // 复用 activate：它会处理旧版本降级、状态行与 AFTER_COMMIT 事件。
+        // 行锁已在本事务持有，activate 内部再取一次是同一把锁（同事务重入，不会自锁）。
         configService.activate(routeId, target);
         log.info("路由 {} 已从版本 {} 回滚到 {}", routeId, current, target);
         return target;

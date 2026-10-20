@@ -146,32 +146,51 @@ public class ConfigService {
      *
      * <p>原 ACTIVE 版本降级为 INACTIVE。整个过程在一个事务内完成，
      * 事务提交后才刷新内存注册表 —— 避免消息读到尚未提交的配置。
+     *
+     * <p><b>并发保护</b>：开头先对 {@code cfg_route} 那一行加行锁
+     * （{@code SELECT ... FOR UPDATE}）。没有这把锁时，两个并发请求会各自读到
+     * 相同的 {@code previous}，各自把自己那一版置为 ACTIVE、都去降级同一个旧版本，
+     * 结果留下**两个 ACTIVE 版本**；而 {@code cfg_route.active_version} 只记住后写者，
+     * 另一个成为 `deleteVersion` 的保护看不见的幽灵。
+     * 锁粒度是单条路由：不同路由的激活互不阻塞。
      */
     @Transactional
     public void activate(long routeId, int version) {
-        CfgRoute route = requireRoute(routeId);
+        // 先锁路由行，再读版本 —— 顺序不能反，否则锁之前的读已经拿到了旧状态
+        CfgRoute route = requireRouteForUpdate(routeId);
         CfgVersion target = getVersion(routeId, version);
+        String targetStatus = target.getStatus();
 
-        if (!ACTIVATABLE.contains(target.getStatus())) {
+        if (!ACTIVATABLE.contains(targetStatus)) {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING,
-                    "版本状态不允许激活: %s（仅允许 %s）".formatted(target.getStatus(), ACTIVATABLE));
+                    "版本状态不允许激活: %s（仅允许 %s）".formatted(targetStatus, ACTIVATABLE));
         }
 
         Integer previous = route.getActiveVersion();
         OffsetDateTime now = OffsetDateTime.now();
 
         if (previous != null && previous != version) {
+            // 加 status='ACTIVE' 条件：兜住历史脏数据（此前可能已经存在多个 ACTIVE），
+            // 只降级真正处在 ACTIVE 的那一行，不误伤已发布但从未激活的版本
             versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
                     .eq(CfgVersion::getRouteId, routeId)
                     .eq(CfgVersion::getVersion, previous)
+                    .eq(CfgVersion::getStatus, "ACTIVE")
                     .set(CfgVersion::getStatus, "INACTIVE"));
         }
 
-        versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
+        // 条件更新 + 影响行数校验：目标版本在加锁期间仍可能被别的路径改动
+        // （例如校验失败回填状态），此时宁可让调用方刷新重试，也不要静默改掉
+        int updated = versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
                 .eq(CfgVersion::getRouteId, routeId)
                 .eq(CfgVersion::getVersion, version)
+                .eq(CfgVersion::getStatus, targetStatus)
                 .set(CfgVersion::getStatus, "ACTIVE")
                 .set(CfgVersion::getPublishedAt, now));
+        if (updated != 1) {
+            throw new ProcessingException(ErrorCode.CONFLICT,
+                    "版本状态已被并发修改，请刷新后重试");
+        }
 
         routeMapper.update(null, Wrappers.<CfgRoute>lambdaUpdate()
                 .eq(CfgRoute::getId, routeId)
@@ -188,7 +207,14 @@ public class ConfigService {
         log.info("路由 {} 已激活配置版本 {}（原版本 {}）", routeId, version, previous);
     }
 
-    /** 确保存在运行状态行。 */
+    /**
+     * 确保存在运行状态行。
+     *
+     * <p>读后写会撞并发：同一路由的两次激活可能都看到「不存在」然后各自 insert，
+     * 后者主键冲突。这里改成「先尝试按主键更新、无行可更新再插入」，
+     * 并把插入的冲突吞掉 —— 状态行的存在与否不影响激活本身的正确性，
+     * 不应因为这一行而让整个激活失败。
+     */
     public void ensureConsumerState(long routeId, int bindVersion) {
         RtConsumerState existing = consumerStateMapper.selectById(routeId);
         if (existing == null) {
@@ -198,7 +224,12 @@ public class ConfigService {
             s.setReason("等待 Consumer 启动");
             s.setBindVersion(bindVersion);
             s.setUpdatedAt(OffsetDateTime.now());
-            consumerStateMapper.insert(s);
+            try {
+                consumerStateMapper.insert(s);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // 并发下另一个请求先插入了：以它为准，本次激活仍然成功
+                log.debug("消费状态行已被并发创建: route={}", routeId);
+            }
         }
     }
 
@@ -206,6 +237,17 @@ public class ConfigService {
 
     private CfgRoute requireRoute(long routeId) {
         CfgRoute route = routeMapper.selectById(routeId);
+        if (route == null) {
+            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + routeId);
+        }
+        return route;
+    }
+
+    /**
+     * 读取路由并加行锁，供「读当前状态 → 据此写多张表」的写路径使用。
+     */
+    public CfgRoute requireRouteForUpdate(long routeId) {
+        CfgRoute route = routeMapper.selectByIdForUpdate(routeId);
         if (route == null) {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + routeId);
         }
