@@ -330,7 +330,10 @@ public class ConfigAdminService {
                     .eq(RtRetryTask::getRouteId, routeId)
                     .in(RtRetryTask::getStatus, UNFINISHED_RETRY_STATUSES));
             if (unfinished != null && unfinished > 0) {
-                throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+                // 用 CONFLICT 而不是 CONFIG_MISSING：前端据此弹「仍然删除」的二次确认。
+                // 靠中文子串判断的写法（`message.includes('重试任务')`）已经在本轮去掉，
+                // 这类流程不能依赖可变的文案。
+                throw new ProcessingException(ErrorCode.CONFLICT,
                         "路由「%s」还有 %d 条未完成的重试任务，删除会使其成为孤儿；确认丢弃可加 force=true"
                                 .formatted(route.getName(), unfinished));
             }

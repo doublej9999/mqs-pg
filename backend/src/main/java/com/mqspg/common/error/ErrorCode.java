@@ -36,6 +36,14 @@ public enum ErrorCode {
 
     // ---- 系统类 ----
     CONFIG_MISSING(ErrorStage.RECEIVE, ErrorSeverity.FATAL),
+    /**
+     * 当前状态下不允许该操作（如「路由还有未完成的重试任务」）。
+     *
+     * <p>与 {@link #CONFIG_MISSING} 的区别是**语义**而不是严重度：调用方需要据此
+     * 走不同的交互分支（弹「仍然删除」的二次确认），因此必须是一个独立错误码，
+     * 不能靠中文文案区分 —— 文案一改，前端的分支就静默失效。
+     */
+    CONFLICT(ErrorStage.RECEIVE, ErrorSeverity.DATA),
     INTERNAL_ERROR(ErrorStage.RECEIVE, ErrorSeverity.TRANSIENT);
 
     private final ErrorStage stage;

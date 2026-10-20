@@ -390,8 +390,9 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Coin, Plus, Refresh } from '@element-plus/icons-vue'
+import { confirmAction } from '@/utils/confirm'
 import {
   activateVersion,
   autoGenerateMappings,
@@ -696,32 +697,35 @@ async function onSubmitRoute() {
 }
 
 async function onDelete(row) {
-  await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `确认删除路由「${row.name}」？它的配置版本会一并删除。`,
-    '删除路由',
-    { type: 'warning' }
+    '删除路由'
   )
+  if (!ok) return
   try {
     await deleteRoute(row.id, false)
     ElMessage.success('已删除')
     await load()
   } catch (e) {
-    // 还有未完成的重试任务时后端会拒绝，并提供 force 选项
-    if (!String(e?.message || '').includes('重试任务')) {
+    // 只有「存在未完成的重试任务」才需要二次确认，其它失败（网络、后端报错）直接结束。
+    // 判据是错误码而不是 message 里的中文：文案改成「尚未完成的重试」时，
+    // 按子串判断的写法会静默退化成「点了没反应」。
+    if (e?.code !== 'CONFLICT') {
       return
     }
+    const force = await confirmAction(
+      '该路由还有未完成的重试任务，删除会让它们成为孤儿（历史记录仍保留可查）。确认丢弃？',
+      '存在未完成的重试任务',
+      { confirmButtonText: '仍然删除' }
+    )
+    if (!force) return
     try {
-      await ElMessageBox.confirm(
-        '该路由还有未完成的重试任务，删除会让它们成为孤儿（历史记录仍保留可查）。确认丢弃？',
-        '存在未完成的重试任务',
-        { type: 'warning', confirmButtonText: '仍然删除' }
-      )
+      await deleteRoute(row.id, true)
+      ElMessage.success('已删除')
+      await load()
     } catch {
-      return
+      // 请求层已提示
     }
-    await deleteRoute(row.id, true)
-    ElMessage.success('已删除')
-    await load()
   }
 }
 
@@ -752,35 +756,45 @@ async function onCreateVersion() {
 }
 
 async function onActivate(row) {
-  await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `确认把生效版本切到 v${row.version}？` +
       `切换只影响之后接收的消息，已在重试队列里的任务仍按绑定版本重放。`,
-    '切换生效版本',
-    { type: 'warning' }
+    '切换生效版本'
   )
-  await activateVersion(current.value.id, row.version)
-  ElMessage.success('已切换')
-  await reloadVersions()
-  await load()
+  if (!ok) return
+  try {
+    await activateVersion(current.value.id, row.version)
+    ElMessage.success('已切换')
+    await reloadVersions()
+    await load()
+  } catch {
+    // 请求层已提示
+  }
 }
 
 async function onRollback() {
-  await ElMessageBox.confirm(
-    '确认回滚到当前生效版本之前最近的一个已发布版本？',
-    '回滚',
-    { type: 'warning' }
-  )
-  const result = await rollbackRoute(current.value.id)
-  ElMessage.success(`已回滚到 v${result.activatedVersion}`)
-  await reloadVersions()
-  await load()
+  const ok = await confirmAction('确认回滚到当前生效版本之前最近的一个已发布版本？', '回滚')
+  if (!ok) return
+  try {
+    const result = await rollbackRoute(current.value.id)
+    ElMessage.success(`已回滚到 v${result.activatedVersion}`)
+    await reloadVersions()
+    await load()
+  } catch {
+    // 请求层已提示
+  }
 }
 
 async function onDeleteVersion(row) {
-  await ElMessageBox.confirm(`确认删除版本 v${row.version}？`, '删除版本', { type: 'warning' })
-  await deleteVersion(current.value.id, row.version)
-  ElMessage.success('已删除')
-  await reloadVersions()
+  const ok = await confirmAction(`确认删除版本 v${row.version}？`, '删除版本')
+  if (!ok) return
+  try {
+    await deleteVersion(current.value.id, row.version)
+    ElMessage.success('已删除')
+    await reloadVersions()
+  } catch {
+    // 请求层已提示
+  }
 }
 
 // ==================================================================

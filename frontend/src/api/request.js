@@ -38,7 +38,12 @@ service.interceptors.response.use(
     }
 
     ElMessage({ message: body.message || '请求失败', type: 'error', duration: 5000 })
-    return Promise.reject(new Error(body.message || `请求失败（code=${body.code}）`))
+    // 带上 code 与完整信封：调用方需要按**错误码**分支（例如「存在未完成的重试任务」
+    // 要弹强制删除确认），而不是靠 message 里有没有某个中文子串 —— 文案一改就静默失效。
+    const err = new Error(body.message || `请求失败（code=${body.code}）`)
+    err.code = body.code
+    err.payload = body
+    return Promise.reject(err)
   },
   (error) => {
     const status = error.response?.status
@@ -60,6 +65,9 @@ service.interceptors.response.use(
 
     const message = body?.message || error.message || `请求失败（HTTP ${status ?? '网络异常'}）`
     ElMessage({ message, type: 'error', duration: 5000 })
+    // 同理：HTTP 层失败也把后端业务码挂上（后端在 4xx/5xx 里同样返回信封）
+    error.code = body?.code
+    error.payload = body
     return Promise.reject(error)
   }
 )

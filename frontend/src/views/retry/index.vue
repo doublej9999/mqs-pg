@@ -104,9 +104,10 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { cancelRetryTask, getRetryTask, listRetry, replayRetryTask, retrySummary } from '@/api/retry'
+import { confirmAction } from '@/utils/confirm'
 
 const statuses = ['PENDING', 'RUNNING', 'SUCCEEDED', 'DLQ', 'CANCELLED']
 
@@ -159,26 +160,39 @@ async function load() {
 }
 
 async function openDetail(row) {
-  detail.value = await getRetryTask(row.id)
-  detailVisible.value = true
+  try {
+    detail.value = await getRetryTask(row.id)
+    detailVisible.value = true
+  } catch {
+    // 请求层已提示
+  }
 }
 
 async function onReplay(row) {
-  await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `确认重放任务 ${row.id}？会追加一轮重试额度并把任务置为待重试。`,
-    '人工重放',
-    { type: 'warning' }
+    '人工重放'
   )
-  await replayRetryTask(row.id)
-  ElMessage.success('已提交重放，调度器将在下一轮领取')
-  load()
+  if (!ok) return
+  try {
+    await replayRetryTask(row.id)
+    ElMessage.success('已提交重放，调度器将在下一轮领取')
+    await load()
+  } catch {
+    // 请求层已提示
+  }
 }
 
 async function onCancel(row) {
-  await ElMessageBox.confirm(`确认取消任务 ${row.id}？`, '取消任务', { type: 'warning' })
-  await cancelRetryTask(row.id)
-  ElMessage.success('已取消')
-  load()
+  const ok = await confirmAction(`确认取消任务 ${row.id}？`, '取消任务')
+  if (!ok) return
+  try {
+    await cancelRetryTask(row.id)
+    ElMessage.success('已取消')
+    await load()
+  } catch {
+    // 请求层已提示
+  }
 }
 
 onMounted(load)

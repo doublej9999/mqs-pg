@@ -104,8 +104,9 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
+import { confirmAction } from '@/utils/confirm'
 import {
   createDatasource,
   deleteDatasource,
@@ -260,12 +261,12 @@ async function onTest(row) {
 }
 
 async function onDelete(row) {
-  await ElMessageBox.confirm(
+  const ok = await confirmAction(
     `确认删除数据源「${row.name}」？` +
       (row.targetCount > 0 ? `它被 ${row.targetCount} 个目标表引用，需要先删掉那些目标表。` : ''),
-    '删除数据源',
-    { type: 'warning' }
+    '删除数据源'
   )
+  if (!ok) return
   try {
     await deleteDatasource(row.id)
     ElMessage.success('已删除')
