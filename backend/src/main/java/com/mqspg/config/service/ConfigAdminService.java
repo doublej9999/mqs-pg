@@ -2,6 +2,8 @@ package com.mqspg.config.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mqspg.common.crypto.PasswordCodec;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
@@ -11,6 +13,7 @@ import com.mqspg.common.sql.Identifiers;
 import com.mqspg.config.dto.DatasourceDto;
 import com.mqspg.config.dto.DatasourceRequest;
 import com.mqspg.config.dto.DraftDto;
+import com.mqspg.config.dto.PoolConfig;
 import com.mqspg.config.dto.DraftRequest;
 import com.mqspg.config.dto.RouteRequest;
 import com.mqspg.config.dto.RouteSummaryDto;
@@ -117,7 +120,7 @@ public class ConfigAdminService {
         ds.setJdbcUrl(req.jdbcUrl().trim());
         ds.setUsername(req.username());
         ds.setPasswordEnc(passwordCodec.encode(req.password()));
-        ds.setPoolConfig(JsonNodes.toJsonNode(req.poolConfig()));
+        ds.setPoolConfig(toPoolJson(PoolConfig.parse(req.poolConfig())));
         ds.setCreatedAt(now);
         ds.setUpdatedAt(now);
         datasourceMapper.insert(ds);
@@ -146,7 +149,9 @@ public class ConfigAdminService {
             patch.setPasswordEnc(passwordCodec.encode(req.password()));
         }
         if (req.poolConfig() != null) {
-            patch.setPoolConfig(JsonNodes.toJsonNode(req.poolConfig()));
+            // 传 {} 就是显式清空：原来这里判断的是 `!= null`，
+            // 而空对象与「没配置」在运行期等价，用户没有办法把参数改回默认值
+            patch.setPoolConfig(toPoolJson(PoolConfig.parse(req.poolConfig())));
         }
         datasourceMapper.updateById(patch);
 
@@ -959,6 +964,40 @@ public class ConfigAdminService {
         }
         // 全部是空白 → 退回默认，避免存出一个空数组让 upsert 无法生成
         return out.isEmpty() ? List.of("id") : List.copyOf(out);
+    }
+
+    /**
+     * {@link PoolConfig} → JSONB 节点，**只写用户显式给出的键**。
+     *
+     * <p>不能直接序列化整个 record：Jackson 会把 null 字段一并写出来，
+     * 存成 {@code {"maximumPoolSize":null,...}}，运行期 {@code applyPoolConfig}
+     * 再拿 {@code asText()} 去 {@code Integer.parseInt("null")}，逐键 warn 一遍 ——
+     * 配置看着有内容，其实一个都没生效。
+     *
+     * <p>返回 {@code {}} 而不是 null：这就是「显式清空」的表达方式，
+     * 与「不改」（传 null，跳过赋值）区分开。
+     */
+    private static JsonNode toPoolJson(PoolConfig pool) {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        if (pool == null) {
+            return node;
+        }
+        if (pool.maximumPoolSize() != null) {
+            node.put("maximumPoolSize", pool.maximumPoolSize());
+        }
+        if (pool.minimumIdle() != null) {
+            node.put("minimumIdle", pool.minimumIdle());
+        }
+        if (pool.connectionTimeout() != null) {
+            node.put("connectionTimeout", pool.connectionTimeout());
+        }
+        if (pool.idleTimeout() != null) {
+            node.put("idleTimeout", pool.idleTimeout());
+        }
+        if (pool.maxLifetime() != null) {
+            node.put("maxLifetime", pool.maxLifetime());
+        }
+        return node;
     }
 
     private static String normalizeSchema(String schema) {

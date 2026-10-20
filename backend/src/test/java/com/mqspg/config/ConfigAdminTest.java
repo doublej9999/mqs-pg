@@ -298,6 +298,57 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
     }
 
     @Test
+    @DisplayName("连接池参数：拼错的键报 400，{} 能清空回默认（I5）")
+    void poolConfigValidatedAndClearable() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-pool", "123456"));
+        try {
+            // ① 拼错的键必须被拒绝。
+            //    原来它是裸 Object，键拼错能一路通过接口，直到运行期
+            //    applyPoolConfig 才一句 warn「忽略未知的连接池参数」—— 配置看着生效，其实没设
+            ProcessingException e = assertThrows(ProcessingException.class,
+                    () -> admin.updateDatasource(ds.id(), new DatasourceRequest(
+                            PREFIX + "ds-pool", containerJdbcUrl(), "postgres", "",
+                            Map.of("maxPoolSize", 10))),
+                    "未知键应被拒绝");
+            assertEquals(ErrorCode.INVALID_INPUT, e.getCode());
+            assertTrue(e.getMessage().contains("maxPoolSize"), "应指出是哪个键: " + e.getMessage());
+            assertTrue(e.getMessage().contains("maximumPoolSize"),
+                    "应列出允许的键名（含形近的正确写法）: " + e.getMessage());
+
+            // ② 类型不对也要拒绝，而不是运行期 NumberFormatException
+            ProcessingException bad = assertThrows(ProcessingException.class,
+                    () -> admin.updateDatasource(ds.id(), new DatasourceRequest(
+                            PREFIX + "ds-pool", containerJdbcUrl(), "postgres", "",
+                            Map.of("connectionTimeout", "abc"))));
+            assertEquals(ErrorCode.INVALID_INPUT, bad.getCode());
+
+            // ③ 合法参数正常落库
+            DatasourceDto ok = admin.updateDatasource(ds.id(), new DatasourceRequest(
+                    PREFIX + "ds-pool", containerJdbcUrl(), "postgres", "",
+                    Map.of("maximumPoolSize", 12, "idleTimeout", 30000)));
+            assertEquals(12, ((Map<?, ?>) ok.poolConfig()).get("maximumPoolSize"));
+
+            // ④ 传 {} 能清空回默认 —— 原来做不到：null 被 updateById 跳过，
+            //    空对象又和「没配置」等价，用户没有办法把参数改回默认值
+            DatasourceDto cleared = admin.updateDatasource(ds.id(), new DatasourceRequest(
+                    PREFIX + "ds-pool", containerJdbcUrl(), "postgres", "",
+                    Map.of()));
+            assertEquals(Map.of(), cleared.poolConfig(), "{} 应把 poolConfig 清空");
+            assertEquals("{}", jdbc.queryForObject(
+                    "SELECT pool_config::text FROM cfg_datasource WHERE id = ?",
+                    String.class, ds.id()));
+
+            // ⑤ 传 null 表示不改：上一步清空的结果保持不变
+            admin.updateDatasource(ds.id(), dsRequest(PREFIX + "ds-pool", ""));
+            assertEquals("{}", jdbc.queryForObject(
+                    "SELECT pool_config::text FROM cfg_datasource WHERE id = ?",
+                    String.class, ds.id()));
+        } finally {
+            admin.deleteDatasource(ds.id());
+        }
+    }
+
+    @Test
     @DisplayName("schema / 表名含注入字符时创建目标表被拒（I4）")
     void rejectsUnsafeIdentifiers() {
         DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-inj", "123456"));
