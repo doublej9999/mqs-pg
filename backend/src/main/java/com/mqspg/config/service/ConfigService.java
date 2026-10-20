@@ -124,7 +124,7 @@ public class ConfigService {
                 .eq(CfgVersion::getRouteId, routeId)
                 .eq(CfgVersion::getVersion, version));
         if (v == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.NOT_FOUND,
                     "配置版本不存在: routeId=%d version=%d".formatted(routeId, version));
         }
         return v;
@@ -162,7 +162,7 @@ public class ConfigService {
         String targetStatus = target.getStatus();
 
         if (!ACTIVATABLE.contains(targetStatus)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本状态不允许激活: %s（仅允许 %s）".formatted(targetStatus, ACTIVATABLE));
         }
 
@@ -228,7 +228,7 @@ public class ConfigService {
     private CfgRoute requireRoute(long routeId) {
         CfgRoute route = routeMapper.selectById(routeId);
         if (route == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + routeId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "路由不存在: " + routeId);
         }
         return route;
     }
@@ -239,7 +239,7 @@ public class ConfigService {
     public CfgRoute requireRouteForUpdate(long routeId) {
         CfgRoute route = routeMapper.selectByIdForUpdate(routeId);
         if (route == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + routeId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "路由不存在: " + routeId);
         }
         return route;
     }
@@ -247,7 +247,7 @@ public class ConfigService {
     private CfgTarget requireTarget(Long targetId) {
         CfgTarget target = targetMapper.selectById(targetId);
         if (target == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "目标表定义不存在: " + targetId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "目标表定义不存在: " + targetId);
         }
         return target;
     }

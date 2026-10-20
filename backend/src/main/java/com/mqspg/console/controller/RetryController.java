@@ -1,6 +1,8 @@
 package com.mqspg.console.controller;
 
 import com.mqspg.common.api.ApiResponse;
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
 import com.mqspg.retry.RetryService;
 import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
@@ -56,7 +58,7 @@ public class RetryController {
     public ApiResponse<RetryTaskDetailDto> get(@PathVariable long id) {
         RtRetryTask task = retryTaskMapper.selectById(id);
         if (task == null) {
-            return ApiResponse.fail("NOT_FOUND", "重试任务不存在: " + id);
+            throw notFound(id);
         }
         return ApiResponse.ok(RetryTaskDetailDto.of(task));
     }
@@ -71,7 +73,7 @@ public class RetryController {
     public ApiResponse<RetryTaskDto> replay(@PathVariable long id) {
         RtRetryTask task = retryTaskMapper.selectById(id);
         if (task == null) {
-            return ApiResponse.fail("NOT_FOUND", "重试任务不存在: " + id);
+            throw notFound(id);
         }
         retryService.makeDueNow(task);
         return ApiResponse.ok(RetryTaskDto.of(retryTaskMapper.selectById(id)));
@@ -82,7 +84,7 @@ public class RetryController {
                                             @RequestParam(defaultValue = "人工取消") String reason) {
         RtRetryTask task = retryTaskMapper.selectById(id);
         if (task == null) {
-            return ApiResponse.fail("NOT_FOUND", "重试任务不存在: " + id);
+            throw notFound(id);
         }
         retryService.cancel(task, reason);
         return ApiResponse.ok(RetryTaskDto.of(retryTaskMapper.selectById(id)));
@@ -120,8 +122,7 @@ public class RetryController {
         }
     }
 
-    /** 单条详情：在列表字段之上补充原始报文与租约信息。 */
-    public record RetryTaskDetailDto(
+    /** 单条详情：在列表字段之上补充原始报文与租约信息。 */    public record RetryTaskDetailDto(
             Long id,
             Long routeId,
             Integer configVersion,
@@ -151,5 +152,16 @@ public class RetryController {
                     // payload 以文本形式返回：前端要展示的是原文，byte[] 会被序列化成数字数组
                     t.getPayload() == null ? null : new String(t.getPayload(), StandardCharsets.UTF_8));
         }
+    }
+
+    /**
+     * 任务不存在时统一抛 404。
+     *
+     * <p>原来是 {@code return ApiResponse.fail("NOT_FOUND", ...)}，HTTP 状态仍是 **200** ——
+     * 前端 axios 的 {@code success=false} 分支虽然也能处理，但监控、网关、以及任何
+     * 按状态码判断的地方都会把它当成成功响应。三个接口（详情 / 重放 / 取消）统一走这里。
+     */
+    private static ProcessingException notFound(long id) {
+        return new ProcessingException(ErrorCode.NOT_FOUND, "重试任务不存在: " + id);
     }
 }

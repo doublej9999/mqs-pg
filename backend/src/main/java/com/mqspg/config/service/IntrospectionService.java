@@ -126,7 +126,7 @@ public class IntrospectionService {
     public ConnectionTestDto testStored(long datasourceId) {
         CfgDatasource cfg = datasourceMapper.selectById(datasourceId);
         if (cfg == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "数据源不存在: " + datasourceId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "数据源不存在: " + datasourceId);
         }
         return probe(cfg.getJdbcUrl(), cfg.getUsername(), passwordCodec.decode(cfg.getPasswordEnc()));
     }
@@ -196,10 +196,10 @@ public class IntrospectionService {
      */
     private static void requireIdentifying(String value, String what) {
         if (value == null || value.isBlank()) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, what + "不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, what + "不能为空");
         }
         if (value.indexOf('"') >= 0 || value.indexOf('\'') >= 0) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     what + "不能包含引号: " + value);
         }
     }

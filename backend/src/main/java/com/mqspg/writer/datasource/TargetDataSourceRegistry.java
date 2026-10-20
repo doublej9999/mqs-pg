@@ -72,7 +72,7 @@ public class TargetDataSourceRegistry implements DisposableBean {
     private HikariDataSource buildPool(Long datasourceId) {
         CfgDatasource cfg = datasourceMapper.selectById(datasourceId);
         if (cfg == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "目标数据源不存在: " + datasourceId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "目标数据源不存在: " + datasourceId);
         }
         HikariConfig hc = new HikariConfig();
         hc.setPoolName("mqspg-target-" + datasourceId);

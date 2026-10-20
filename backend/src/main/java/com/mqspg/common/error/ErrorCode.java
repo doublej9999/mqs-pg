@@ -55,6 +55,26 @@ public enum ErrorCode {
      * 不能靠中文文案区分 —— 文案一改，前端的分支就静默失效。
      */
     CONFLICT(ErrorStage.RECEIVE, ErrorSeverity.DATA),
+    /**
+     * 请求指向的对象不存在（路由 / 目标表 / 数据源 / 配置版本）。
+     *
+     * <p><b>为什么必须从 {@link #CONFIG_MISSING} 里拆出来</b>：那个码是
+     * 「消费时读不到配置」的运行时故障，严重度 FATAL；但它长期被当成万能入参错误
+     * 用了四十多处（「路由不存在」「名称已存在」「不可编辑」……）。
+     * 一旦按严重度映射 HTTP 状态码，所有这些表单校验都会变成 503。
+     * 拆出来之后：{@code NOT_FOUND} → 404，{@code INVALID_INPUT} → 400，
+     * 真正 FATAL 的 {@link #PG_CONNECTION_ERROR} / {@link #PG_TIMEOUT} → 503。
+     */
+    NOT_FOUND(ErrorStage.RECEIVE, ErrorSeverity.DATA),
+    /**
+     * 入参不合法（必填缺失、格式不对、状态不允许该操作、重名冲突）。
+     *
+     * <p>与 {@link #NOT_FOUND} 分开是因为 HTTP 语义不同：同一个「路由」，
+     * 不存在是 404，而「状态不是 DRAFT 所以不可编辑」是 400 —— 资源在，操作不允许。
+     * 与 {@link #CONFLICT} 也分开：那个专指「需要前端走二次确认」的并发/占用冲突，
+     * 前端靠它弹「仍然删除」。
+     */
+    INVALID_INPUT(ErrorStage.RECEIVE, ErrorSeverity.DATA),
     INTERNAL_ERROR(ErrorStage.RECEIVE, ErrorSeverity.TRANSIENT);
 
     private final ErrorStage stage;

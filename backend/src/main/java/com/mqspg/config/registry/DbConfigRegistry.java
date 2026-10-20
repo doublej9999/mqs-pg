@@ -250,11 +250,11 @@ public class DbConfigRegistry implements ConfigRegistry {
         }
         CfgRoute route = routeMapper.selectById(routeId);
         if (route == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + routeId);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "路由不存在: " + routeId);
         }
         CfgTarget target = targetMapper.selectById(route.getTargetId());
         if (target == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.NOT_FOUND,
                     "路由 %d 的目标表定义不存在: targetId=%d".formatted(routeId, route.getTargetId()));
         }
         return assembler.assemble(v, target);

@@ -107,7 +107,7 @@ public class ConfigAdminService {
     public DatasourceDto createDatasource(DatasourceRequest req) {
         requireDatasourceFields(req, true);
         if (nameTaken(req.name(), null)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "数据源名称已存在: " + req.name());
         }
         OffsetDateTime now = OffsetDateTime.now();
@@ -129,7 +129,7 @@ public class ConfigAdminService {
         CfgDatasource existing = requireDatasource(id);
         requireDatasourceFields(req, false);
         if (nameTaken(req.name(), id)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "数据源名称已存在: " + req.name());
         }
         // 同上：poolConfig 是 JsonNode，必须走实体上的 JsonbTypeHandler
@@ -166,7 +166,7 @@ public class ConfigAdminService {
         List<CfgTarget> refs = targetMapper.selectList(
                 Wrappers.<CfgTarget>lambdaQuery().eq(CfgTarget::getDatasourceId, id));
         if (!refs.isEmpty()) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "数据源「%s」被 %d 个目标表引用，无法删除: %s".formatted(
                             ds.getName(), refs.size(), targetNames(refs)));
         }
@@ -197,11 +197,11 @@ public class ConfigAdminService {
         requireTargetFields(req);
         CfgDatasource ds = requireDatasource(req.datasourceId());
         if (targetNameTaken(req.name(), null)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "目标表名称已存在: " + req.name());
         }
         if (sameTableTaken(req, null)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "同一数据源下已存在该表定义: %s.%s".formatted(req.schemaName(), req.tableName()));
         }
         OffsetDateTime now = OffsetDateTime.now();
@@ -226,11 +226,11 @@ public class ConfigAdminService {
         requireTargetFields(req);
         CfgDatasource ds = requireDatasource(req.datasourceId());
         if (targetNameTaken(req.name(), id)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "目标表名称已存在: " + req.name());
         }
         if (sameTableTaken(req, id)) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "同一数据源下已存在该表定义: %s.%s".formatted(req.schemaName(), req.tableName()));
         }
         // upsertKeys 是 JsonNode，必须走实体上的 JsonbTypeHandler（见 saveDraft 的说明）
@@ -258,7 +258,7 @@ public class ConfigAdminService {
                 Wrappers.<CfgRoute>lambdaQuery().eq(CfgRoute::getTargetId, id));
         if (!refs.isEmpty()) {
             String names = refs.stream().map(CfgRoute::getName).collect(Collectors.joining("、"));
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "目标表「%s」被 %d 条路由引用，无法删除: %s".formatted(t.getName(), refs.size(), names));
         }
         targetMapper.deleteById(id);
@@ -386,11 +386,11 @@ public class ConfigAdminService {
     public DraftDto saveDraft(long routeId, DraftRequest req) {
         requireRoute(routeId);
         if (req == null || req.content() == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "草稿内容不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "草稿内容不能为空");
         }
         JsonNode content = JsonNodes.toJsonNode(req.content());
         if (content == null || !content.isObject()) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "草稿内容必须是 JSON 对象，形如 {mappingStrategy, jslt, mappings[]}");
         }
 
@@ -400,7 +400,7 @@ public class ConfigAdminService {
                     req.changeNote()), true);
         }
         if (!isEditable(draft.getStatus())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本 %d 处于 %s，不可编辑".formatted(draft.getVersion(), draft.getStatus()));
         }
 
@@ -439,7 +439,7 @@ public class ConfigAdminService {
         CfgRoute route = requireRoute(routeId);
         if (findDraft(routeId) != null) {
             // 保持「每个路由至多一个草稿」的不变量：否则 getDraft/saveDraft 会挑到哪一个不确定
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "该路由已有草稿版本，请先发布或删除它再新建");
         }
         JsonNode content = null;
@@ -475,12 +475,12 @@ public class ConfigAdminService {
         // content 是 JSONB，必须走实体字段上的 JsonbTypeHandler 才映射得出来。
         CfgVersion locked = versionMapper.lockForUpdate(routeId, version);
         if (locked == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.NOT_FOUND,
                     "配置版本不存在: routeId=%d version=%d".formatted(routeId, version));
         }
         CfgVersion v = requireVersion(routeId, version);
         if (!isEditable(locked.getStatus())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本 %d 处于 %s，不可发布".formatted(version, locked.getStatus()));
         }
         ValidationResultDto result =
@@ -516,11 +516,11 @@ public class ConfigAdminService {
         CfgRoute route = requireRoute(routeId);
         CfgVersion v = requireVersion(routeId, version);
         if (route.getActiveVersion() != null && route.getActiveVersion() == version) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本 %d 是当前生效版本，不可删除；请先激活其它版本".formatted(version));
         }
         if ("ACTIVE".equals(v.getStatus())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本 %d 处于 ACTIVE，不可删除".formatted(version));
         }
         // 还有活跃重试任务绑在这个版本上时，删掉它会让那些任务永远重放不成。
@@ -556,14 +556,14 @@ public class ConfigAdminService {
         CfgRoute route = configService.requireRouteForUpdate(routeId);
         Integer current = route.getActiveVersion();
         if (current == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "该路由没有生效版本，无法回滚");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "该路由没有生效版本，无法回滚");
         }
         List<CfgVersion> candidates = versionMapper.selectList(Wrappers.<CfgVersion>lambdaQuery()
                 .eq(CfgVersion::getRouteId, routeId)
                 .lt(CfgVersion::getVersion, current)
                 .in(CfgVersion::getStatus, List.of("PUBLISHED", "INACTIVE")));
         if (candidates.isEmpty()) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "没有可回滚的历史版本（当前版本 %d）".formatted(current));
         }
         candidates.sort(Comparator.comparing(CfgVersion::getVersion).reversed());
@@ -634,7 +634,7 @@ public class ConfigAdminService {
                 throw new ProcessingException(ErrorCode.CONFLICT,
                         "该路由已有草稿版本（并发创建），请刷新后再试");
             }
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "版本号冲突（route=%d version=%d），请刷新后重试".formatted(routeId, version));
         }
         return v;
@@ -835,7 +835,7 @@ public class ConfigAdminService {
             q.ne(CfgRoute::getId, excludeId);
         }
         if (routeMapper.selectCount(q) > 0) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "已存在消费同一 Topic+Tag 的路由: topic=%s tag=%s".formatted(topic, tag));
         }
     }
@@ -844,53 +844,53 @@ public class ConfigAdminService {
 
     private void requireDatasourceFields(DatasourceRequest req, boolean requirePassword) {
         if (req == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "请求体不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "请求体不能为空");
         }
         if (isBlank(req.name())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "数据源名称不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "数据源名称不能为空");
         }
         if (isBlank(req.jdbcUrl())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "JDBC URL 不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "JDBC URL 不能为空");
         }
         if (!req.jdbcUrl().trim().startsWith("jdbc:postgresql:")) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "只支持 PostgreSQL 数据源（MERGE RETURNING 与分区语法是 PG 专有）: " + req.jdbcUrl());
         }
         if (isBlank(req.username())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "用户名不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "用户名不能为空");
         }
         if (requirePassword && (req.password() == null || req.password().isEmpty())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "新建数据源必须提供密码");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "新建数据源必须提供密码");
         }
     }
 
     private void requireTargetFields(TargetRequest req) {
         if (req == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "请求体不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "请求体不能为空");
         }
         if (isBlank(req.name())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "目标表名称不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "目标表名称不能为空");
         }
         if (req.datasourceId() == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "必须选择数据源");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "必须选择数据源");
         }
         if (isBlank(req.tableName())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "表名不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "表名不能为空");
         }
     }
 
     private void requireRouteFields(RouteRequest req) {
         if (req == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "请求体不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "请求体不能为空");
         }
         if (isBlank(req.name())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由名称不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "路由名称不能为空");
         }
         if (isBlank(req.topic())) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "Topic 不能为空");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "Topic 不能为空");
         }
         if (req.targetId() == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "必须选择目标表");
+            throw new ProcessingException(ErrorCode.INVALID_INPUT, "必须选择目标表");
         }
     }
 
@@ -899,7 +899,7 @@ public class ConfigAdminService {
     private CfgDatasource requireDatasource(Long id) {
         CfgDatasource ds = id == null ? null : datasourceMapper.selectById(id);
         if (ds == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "数据源不存在: " + id);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "数据源不存在: " + id);
         }
         return ds;
     }
@@ -907,7 +907,7 @@ public class ConfigAdminService {
     private CfgTarget requireTarget(Long id) {
         CfgTarget t = id == null ? null : targetMapper.selectById(id);
         if (t == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "目标表定义不存在: " + id);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "目标表定义不存在: " + id);
         }
         return t;
     }
@@ -915,7 +915,7 @@ public class ConfigAdminService {
     private CfgRoute requireRoute(long id) {
         CfgRoute r = routeMapper.selectById(id);
         if (r == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING, "路由不存在: " + id);
+            throw new ProcessingException(ErrorCode.NOT_FOUND, "路由不存在: " + id);
         }
         return r;
     }
@@ -923,7 +923,7 @@ public class ConfigAdminService {
     private CfgVersion requireVersion(long routeId, int version) {
         CfgVersion v = findVersion(routeId, version);
         if (v == null) {
-            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+            throw new ProcessingException(ErrorCode.NOT_FOUND,
                     "配置版本不存在: routeId=%d version=%d".formatted(routeId, version));
         }
         return v;
