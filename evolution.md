@@ -7,6 +7,43 @@
 ---
 
 #
+## 2026-10-20 · G2 发布/保存的状态更新不加条件，会互相覆盖
+
+- **背景**
+  - `publishVersion` 先读版本、按读到的 `content` 校验，最后按 id 无条件写 `PUBLISHED`；
+    `saveDraft` 用 `updateById` 无条件把状态写成 `DRAFT`。
+  - 两种后果：① `activate` 之后一次迟到的 `publish` 会把现役版本从 `ACTIVE`
+    改回 `PUBLISHED`，于是「现役版本状态不是 ACTIVE」，`deleteVersion` 的 ACTIVE 保护失效；
+    ② 校验与更新之间可被并发 `saveDraft` 改写 content，
+    等于**把没校验过的内容标成已发布**。
+
+- **改动**
+  - `CfgVersionMapper#lockForUpdate`：按 (routeId, version) `SELECT id, status ... FOR UPDATE`。
+  - `publishVersion`：先加行锁确认状态与 id，再用 `requireVersion` 取带 content 的完整实体
+    （JSONB 必须走实体上的 `JsonbTypeHandler`），校验通过后按 `eq(id).eq(status)` 条件更新
+    并断言影响行数 = 1；非 1 行抛 `CONFLICT`。
+  - `saveDraft`：先用一条 `eq(id).eq(status)` 的 UPDATE 锁住该行并确认状态没被并发改掉，
+    再用 `updateById` 单独写 content（JSONB 仍然只能走实体）。
+  - `CONFLICT` 错误码复用 G3 引入的那个（语义就是「当前状态下不允许该操作」）。
+
+- **验证**
+  - 新增 `publishCannotDowngradeActiveVersion`：v1 激活后再 publish 被拒绝，
+    且状态仍为 ACTIVE。
+  - 新增 `concurrentPublishAndSaveDraftKeepsValidatedContent`：并发 publish + saveDraft，
+    断言「若最终是 PUBLISHED，其 change_note 必不是 saveDraft 写的那个」。
+  - `mvn test`：58 passed（56 + 2 条）。
+  - **实现中踩到的坑**：`lockForUpdate` 最初写成 `SELECT *`，JSONB 的 `content`
+    在注解查询的自动映射下取到 null，导致 publish 报「内容为空」，
+    并连带让 6 个既有用例（激活、回滚、并发激活…）一起变红。
+    注解查询不走实体的 `JsonbTypeHandler` —— 这条已写进 mapper 的 javadoc。
+
+- **影响与回滚**
+  - 写路径变「串行一点」：同一版本的 publish 与 saveDraft 现在会互相排队，
+    并发时后者拿到 `CONFLICT` 而非静默覆盖。
+  - 回滚：去掉 `lockForUpdate` 与两处 `eq(status)` 条件。
+
+---
+
 ## 2026-10-20 · G3 版本删除后重试任务永久卡死（补终态出口）
 
 - **背景**

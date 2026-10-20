@@ -394,6 +394,110 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
     }
 
     @Test
+    @DisplayName("已激活的版本再调 publish 不会把它改回 PUBLISHED")
+    void publishCannotDowngradeActiveVersion() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-pb", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-pb", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-pb", TOPIC + "pb", TAG, target.id()));
+
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+        configService.activate(route.id(), v1);
+
+        // 迟到的 publish：状态已不是「可编辑」，应被拒绝而不是静默改回 PUBLISHED。
+        // 若不拦，现役版本状态就不是 ACTIVE，deleteVersion 的 ACTIVE 保护随之失效。
+        ProcessingException e = assertThrows(ProcessingException.class,
+                () -> admin.publishVersion(route.id(), v1));
+        assertTrue(e.getMessage().contains("不可发布"), e.getMessage());
+
+        assertEquals("ACTIVE", jdbc.queryForObject(
+                "SELECT status FROM cfg_version WHERE route_id = ? AND version = ?",
+                String.class, route.id(), v1),
+                "activate 之后状态必须仍是 ACTIVE");
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    @Test
+    @DisplayName("并发 publish 与 saveDraft：发布出去的内容必须是校验过的那一份")
+    void concurrentPublishAndSaveDraftKeepsValidatedContent() throws Exception {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-ps", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-ps", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-ps", TOPIC + "ps", TAG, target.id()));
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+
+        // 两个线程：一个反复 publish，一个反复 saveDraft 改 changeNote
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<?> publisher = pool.submit(() -> {
+                start.await();
+                try {
+                    admin.publishVersion(route.id(), v1);
+                } catch (ProcessingException expected) {
+                    // CONFLICT（状态被并发改）也是合法结局
+                }
+                return null;
+            });
+            Future<?> saver = pool.submit(() -> {
+                start.await();
+                try {
+                    admin.saveDraft(route.id(), new DraftRequest(validContent(), "并发保存"));
+                } catch (ProcessingException expected) {
+                    // 已被发布时，「版本不可编辑」是合法结局
+                }
+                return null;
+            });
+            start.countDown();
+            publisher.get(30, TimeUnit.SECONDS);
+            saver.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 核心断言：无论谁先到，PUBLISHED 版本的 change_note 不能是 saveDraft 写的那个 ——
+        // 发布意味着「这一份内容通过了校验」，它不该被并发的草稿覆盖。
+        String status = jdbc.queryForObject(
+                "SELECT status FROM cfg_version WHERE route_id = ? AND version = ?",
+                String.class, route.id(), v1);
+        String note = jdbc.queryForObject(
+                "SELECT change_note FROM cfg_version WHERE route_id = ? AND version = ?",
+                String.class, route.id(), v1);
+        if ("PUBLISHED".equals(status)) {
+            assertTrue(!"并发保存".equals(note),
+                    "已发布的内容不能被并发草稿覆盖（change_note 仍为「并发保存」）");
+        } else {
+            // saveDraft 赢了：版本仍是可编辑状态，内容自然可以是草稿
+            assertTrue(isEditableStatus(status), "非 PUBLISHED 时应仍是可编辑状态: " + status);
+        }
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    private static boolean isEditableStatus(String status) {
+        return "DRAFT".equals(status) || "VALID".equals(status);
+    }
+
+    /** 一份能通过校验的完整内容（覆盖 id / name / update_time）。 */
+    private static Map<String, Object> validContent() {
+        return Map.of(
+                "mappingStrategy", "EXACT",
+                "mappings", List.of(
+                        Map.of("target", "id", "source", "$.id",
+                                "transform", Map.of("type", "long")),
+                        Map.of("target", "name", "source", "$.name",
+                                "transform", Map.of("type", "string")),
+                        Map.of("target", "update_time", "source", "$.updatedAt",
+                                "transform", Map.of("type", "timestamp"))));
+    }
+
+    @Test
     @DisplayName("回滚会激活上一个已发布版本")
     void rollbackActivatesPreviousVersion() {
         DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds10", "123456"));

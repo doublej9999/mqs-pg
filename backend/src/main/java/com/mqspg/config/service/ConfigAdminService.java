@@ -398,16 +398,30 @@ public class ConfigAdminService {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING,
                     "版本 %d 处于 %s，不可编辑".formatted(draft.getVersion(), draft.getStatus()));
         }
-        // 用「实体 + updateById」而不是 LambdaUpdateWrapper.set(...)。
-        // content 是 JsonNode，只有实体字段上声明的 JsonbTypeHandler 认它；
-        // .set() 会把裸 JsonNode 直接交给 JDBC 驱动，PG 无法推断它的 SQL 类型而报错。
-        // updateById 的 NOT_NULL 策略顺带满足「只改传入字段」的语义。
+
+        // 条件更新先行，作用是把这一行锁住并确认状态没被并发改掉：
+        // ① 记录是 DRAFT 才允许覆盖 —— 否则一次迟到的「保存草稿」会把已发布的
+        //    内容换掉，而版本状态仍显示 PUBLISHED，校验结果与库里的内容对不上；
+        // ② 这条 UPDATE 会持有行锁直到提交，publish 的 selectForUpdate 因此排队等待，
+        //    不会出现「校验的是旧内容、发布的是新内容」。
+        int touched = versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
+                .eq(CfgVersion::getId, draft.getId())
+                .eq(CfgVersion::getStatus, draft.getStatus())
+                .set(CfgVersion::getChangeNote, req.changeNote())
+                .set(CfgVersion::getStatus, "DRAFT"));
+        if (touched != 1) {
+            throw new ProcessingException(ErrorCode.CONFLICT,
+                    "版本 %d 的状态已被并发修改，请刷新后重试".formatted(draft.getVersion()));
+        }
+
+        // content 只能用「实体 + updateById」：它是 JsonNode，只有实体字段上声明的
+        // JsonbTypeHandler 认它；用 .set() 会把裸 JsonNode 交给 JDBC 驱动，
+        // PG 无法推断 SQL 类型而报错。updateById 的 NOT_NULL 策略顺带满足「只改传入字段」。
         CfgVersion patch = new CfgVersion();
         patch.setId(draft.getId());
         patch.setContent(content);
-        patch.setChangeNote(req.changeNote());
-        patch.setStatus("DRAFT");
         versionMapper.updateById(patch);
+
         draft.setContent(content);
         draft.setChangeNote(req.changeNote());
         draft.setStatus("DRAFT");
@@ -452,10 +466,17 @@ public class ConfigAdminService {
     @Transactional
     public ValidationResultDto publishVersion(long routeId, int version) {
         CfgRoute route = requireRoute(routeId);
-        CfgVersion v = requireVersion(routeId, version);
-        if (!isEditable(v.getStatus())) {
+        // 先加行锁确认状态（只取 id/status），再单独取带 content 的完整实体：
+        // content 是 JSONB，必须走实体字段上的 JsonbTypeHandler 才映射得出来。
+        CfgVersion locked = versionMapper.lockForUpdate(routeId, version);
+        if (locked == null) {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING,
-                    "版本 %d 处于 %s，不可发布".formatted(version, v.getStatus()));
+                    "配置版本不存在: routeId=%d version=%d".formatted(routeId, version));
+        }
+        CfgVersion v = requireVersion(routeId, version);
+        if (!isEditable(locked.getStatus())) {
+            throw new ProcessingException(ErrorCode.CONFIG_MISSING,
+                    "版本 %d 处于 %s，不可发布".formatted(version, locked.getStatus()));
         }
         ValidationResultDto result =
                 validator.validate(route, targetMapper.selectById(route.getTargetId()), v.getContent());
@@ -464,10 +485,18 @@ public class ConfigAdminService {
                     routeId, version, result.issues().size());
             return result;
         }
-        versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
-                .eq(CfgVersion::getId, v.getId())
+        // 条件更新：状态必须仍是我们校验时读到的那个。
+        // 不加这个条件时，一次迟到的 publish 会把已被 activate 的版本从 ACTIVE 改回 PUBLISHED,
+        // 于是「现役版本状态不是 ACTIVE」，deleteVersion 的 ACTIVE 保护随之失效。
+        int updated = versionMapper.update(null, Wrappers.<CfgVersion>lambdaUpdate()
+                .eq(CfgVersion::getId, locked.getId())
+                .eq(CfgVersion::getStatus, locked.getStatus())
                 .set(CfgVersion::getStatus, "PUBLISHED")
                 .set(CfgVersion::getPublishedAt, OffsetDateTime.now()));
+        if (updated != 1) {
+            throw new ProcessingException(ErrorCode.CONFLICT,
+                    "版本 %d 的状态已被并发修改，请刷新后重试".formatted(version));
+        }
 
         // 只有草稿版本在等发布，正好借这个时机把改动落进运行状态行
         configService.ensureConsumerState(routeId, version);
