@@ -7,6 +7,150 @@
 ---
 
 #
+## 2026-10-21 · 里程碑 K / L / M 收尾（K2、K4、K6–K8；L1、L2、L4–L6；M 全部覆盖）
+
+这一批里有两处「计划说要跳过、实测发现不该跳」（L4）和两处「计划要做的、
+本机条件不具备」（L2 镜像构建、L1 前端 lint）。都如实记了。
+
+### K：前端体验
+
+- **K2 运维页只在首次进入时取数（工作量最大、收益最直接的一条）**
+  - 背景：视图被 `<keep-alive :max="10">` 缓存，6 个视图全部只在 `onMounted`
+    拉一次数据，全仓 `setInterval|setTimeout|onUnmounted` **零命中**。
+    从「总览」切到「重试队列」再切回，看到的是首次进入时的快照 ——
+    对运维面板这是实质性缺陷：用户以为看到的是现在。
+  - 改动：dashboard / retry / errors / raw 四个「以实时性为职责」的视图改用
+    `onActivated`。它在首次挂载时也会触发，因此可以直接替代 `onMounted`，
+    不会漏掉首屏加载。总览页加可选 30s 轮询，开关在右上角，**默认关闭**。
+  - 定时器 `onDeactivated` + `onUnmounted` **双清理**：缓存组件不会被卸载，
+    只写 `onUnmounted` 会漏，人离开页面后仍在发请求 —— 验收恰好是
+    「离开后 Network 面板不再有新请求」，只写一个必然漏。
+  - 轮询走 `quietRefresh`（不置 loading 骨架），否则每 30 秒整页闪一下；
+    上一轮未完成时跳过本次，避免请求叠加。
+  - **刻意不改 datasources / routes**：用户正在编辑表单时被一次「自动重取」
+    把输入冲掉，比看到旧数据更糟。
+
+- **K4 两个对话框共用一个 `columns` ref** —— 这是本次唯一一个「会让人看到
+  错误数据」的前端缺陷：路由表单的 `loadColumns()` 与映射编辑器的
+  `loadColumnsFor()` 写同一个 ref，两框同开时后写者覆盖前者，
+  映射编辑器里出现**另一张表的列**，进而可能选出目标表上不存在的列。
+  拆成 `mappingColumns` 后物理上不可能互相污染。
+  另外 `openMappings` 原先先置 `visible=true` 再 await —— 任一请求失败就留下
+  空对话框，而「映射为空」会被理解成配置丢了。改成全部就绪再显示；
+  取列失败不阻断（编辑器允许手工填列名）但会 warning 说明，
+  免得用户分不清「没取到」和「表没列」。
+
+- **K6 按需引入（唯一的量化收益：首屏 JS 1218 → 642 KB，CSS 364 → 152 KB）**
+  - 图标：原来 `main.js` 把 `@element-plus/icons-vue` **全部**注册成全局组件，
+    注释理由是「图标用量不大」—— 但所有页面本来就是显式 import 的。
+    删之前先给 Navbar（`UserFilled`/`ArrowDown`）与 login（`User`/`Lock`）
+    补 import，那两处确实依赖全局注册，不补就是空标签。
+  - `unplugin-vue-components` 按需引入；去掉 `app.use(ElementPlus)`，
+    中文 locale 改由 `App.vue` 的 `<el-config-provider>` 提供
+    （缺了它分页/日期选择器的内置文案会退回英文）。
+  - 页面里 `from 'element-plus'` 全部改深路径 —— barrel 会 re-export 全部组件，
+    从 barrel 取一个 `ElMessage` 就等于把整套拉回包里。
+  - `manualChunks` 只拆 vue，**不**强制归并 element-plus：
+    强制归并会把按需效果掩盖掉，观测到的体积不是真的
+    （第一次就是被这个骗了，改完体积几乎没变）。
+  - **按需引入最容易踩的两个坑，都验过**：① 函数式 API 的样式插件解析不到
+    （`ElMessage`/`ElMessageBox` 不出现在模板里），必须手动 import 它们的
+    `style/css`；② **指令**不在 resolver 范围 —— `v-loading` 全仓 7 处，
+    不显式 `app.directive('loading', ElLoading.directive)` 就**不显示加载遮罩
+    且不报错**，属于最难发现的回归。`ElLoading` 也走深路径。
+  - 产物校验是脚本核对而非目测：实际用到的组件类名在 CSS 中全在
+    （`el-option` 的真实类名是 `el-select-dropdown__item`，8 处，正常）；
+    未使用的 `el-radio`/`el-empty`/`el-tabs`/`el-date-picker` 产物里也没有 ——
+    这正是按需引入应有的样子。
+
+- **K7 失败静默成空表**：五个 `load()` 只有 `try/finally` 没有 `catch`，
+  后端不可达时表现为「没有数据」而不是「加载失败」，与「确实没有流水 /
+  没有路由」长得一模一样。补 `catch` + 顶部 `el-alert`，并**清空**列表
+  （留着上一次结果会让人误以为是当前状态）。retry 页改 `Promise.allSettled`：
+  列表失败时清空报错，但摘要仍显示 —— 摘要取到了没理由一起丢。
+
+- **K8 小项**：版本抽屉「刷新」改用已存在的 `reloadVersions`（原来复用
+  `openVersions` 会让抽屉重开一遍）；limit 输入框补 `@change`；
+  操作列空表头补「操作」；三个零调用 API 标「预留」而**不是**删
+  （`createTarget`/`updateTarget` 是在用的，一刀切很容易误伤）；
+  `api/overview.js` 拆出 `api/raw.js` 与 `api/errors.js`；
+  `index.html` 补 description 与内联 SVG favicon（不引入二进制资源）。
+  `store/user.js` 写清「这不是鉴权，只是界面占位，绝不能当安全边界」——
+  按 §9 Q1 保留现状，但把话说白，而不是假装它是安全的。
+
+- **K5 只做了前半，理由要说清**：抽掉三处逐字重复的草稿水合
+  （`persistDraft` **刻意不改** —— 保存后回写与「加载草稿」语义不同，
+  三处看着像重复其实只有两处是同一件事），状态色收敛到
+  `constants/status.js`。后者修掉了一个**实际不一致**：同一个 `PAUSED`，
+  总览页是黄色、路由页是红色，运维只会以为是两个状态。
+  拆成 RoutesTable / RouteFormDialog / VersionDrawer / MappingEditor
+  四个组件（计划 K5 的主体）**没做**：纯结构重构、前端零测试兜底，
+  必须逐页手测，当前条件不具备；单独一次提交更便于 revert。
+
+### L：工程化
+
+- **L4 计划标「条件性跳过」，实测发现不该跳**（详见该提交）：
+  springdoc 2.8.6 的父 POM 面向 Boot 3.4.x，看着不兼容；实际起服务验过
+  可用（33 个端点全列出、Swagger UI 200）。默认关闭、dev 打开。
+  **顺带撞出一个既有缺陷**：`/v3/api-docs` 在关闭时返回 500 而不是 404 ——
+  根因是 Spring 6.1 起未匹配请求抛 `NoResourceFoundException`，
+  落到 `Exception` 兜底分支就成了「500 + 服务内部错误 + error 级堆栈」，
+  即**任何拼错的 URL 都会往日志里刷一条内部错误**。加专门处理器映射 404。
+
+- **L5**：`jsconfig.json`（只做路径跳转，`checkJs: false` 不做类型检查）；
+  体积守卫 `scripts/check-bundle-size.js` + `pnpm size` + CI 步骤。
+  阈值取 K6 实测基线 + 约 15% 余量（642/152/160 → 760/190/200）。
+  刻意用**原始字节**而非 gzip：gzip 对「某组件被意外全量引入」不敏感。
+  失败时打印常见原因，而不是只丢一句「超了」。
+
+- **L1 只做了后端**：spotless 绑到 `verify` 的 `check`，**只 check 不 apply**
+  （构建过程自动改源码是隐式副作用，CI 上尤其危险）。
+  规则克制到只做 import 顺序 / 尾随空格 / 末尾换行 —— 按 L1 要求
+  「格式化必须单独一次提交 + 先配 `.git-blame-ignore-revs`」分两步走。
+  **前端 lint 没做，是有意的**：AGENTS.md 明确写着「仍无 lint/format/typecheck
+  工具，不要为它发明命令」，而引入 eslint+prettier 会带三个新依赖、一套配置
+  和一波需逐页目测的 diff，前端零测试兜底。文档里也不写不存在的命令。
+
+- **L2 容器化**：backend/frontend Dockerfile + nginx 反代 + compose + .dockerignore。
+  **镜像构建未能在本机验证**：Docker Hub 不可达
+  （registry-1.docker.io / auth.docker.io 探测 False，npm registry 正常），
+  本地也没有任何 jdk/node/nginx 基础镜像可复用，
+  `docker build` 停在 `FROM eclipse-temurin:21-jre`。
+  已做的是静态交叉核对：`docker compose config` 通过、nginx 的
+  `proxy_pass` 服务名 = compose 服务名、三个端口互不冲突、
+  `.dockerignore` 未误排 `nginx.conf`、jar 名与 COPY 通配匹配、
+  pnpm 12 与 lockfileVersion 9.0 对得上。
+  **完整的 `docker compose up` 没有跑过**，这一点写进了提交信息与 README。
+
+- **L6 文档单一事实来源**：README 不再重复写用例数（原来写死「83」，
+  实际已 102，这类数字必定过时）。用例数与通过情况只写在 evolution.md，
+  里程碑状态只写在 README 进度表。AGENTS.md 的「只有三个脚本」也同步成四个。
+
+### M：集成测试
+
+**五项全部已有覆盖，无需新增**（逐条核对过，不是推断）：
+- M1 并发激活 → `ConfigAdminTest#concurrentActivateKeepsSingleActive`（G1 时写的）
+- M2 并发草稿 + 发布 → `ConfigAdminTest#concurrentPublishAndSaveDraftKeepsValidatedContent`
+- M3 重试断层 → `RetrySchedulerTest#missingConfigEventuallyGoesToDlq`（G3 时写的）
+- M4 部分唯一索引 → `ConfigAdminTest`「Upsert Key 上只有部分唯一索引时发布失败（I3 / M4）」
+- M5 自愈对账 → `ConfigRegistryTest#reconcileRepairsDrift`（H1 时写的）
+
+### 验证与回滚
+
+- `mvn test` **102 passed**（101 → 102：新增 `unknownPathIs404`）；
+  `mvn verify -DskipTests` 通过，spotless「138 files clean」。
+- `pnpm build` + `pnpm size` 通过（JS 642/760、CSS 152/190、最大 160/200）。
+- 前端四条改动（K2/K4/K6/K7）**没有自动化测试兜底**（项目无前端测试框架），
+  验收方式是逐页手测：切走再切回数据是否新、两框同开列是否串、
+  停后端是否有明确失败提示、`v-loading` 遮罩是否还在。
+  K6 的按需引入尤其要逐页目测样式（这是它唯一的真实风险）。
+- 回滚点：K6 可整体 revert 回「全量引入」；L1 拆成两个提交，
+  格式化与检查可分别回滚；L2/L4 都是新增文件/依赖，移除即回滚。
+- 全程未触及 §6 红线（`WHEN MATCHED` 单调守卫、ACK 语义、版本绑定、
+  `cfg_version.content` 不可变、留存非阻塞、DEFAULT 分区修法）。
+
+---
+
 ## 2026-10-21 · 里程碑 J 全部交付（J1–J7 重试与写入热路径）
 
 主题是「积压与热路径上的放大效应」：重试逐条写、租约覆盖不住整批、
