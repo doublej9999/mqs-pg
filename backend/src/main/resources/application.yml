@@ -58,6 +58,24 @@ management:
   endpoint:
     health:
       show-details: always
+      # ------------------------------------------------------------------
+      # liveness / readiness 分组（H7）
+      #
+      # 只有一个 /actuator/health 时，K8s 若拿它当 liveness，
+      # 一次 PG 抖动就会让**整个 Pod 被重启** —— 而重启修不好 PG，
+      # 反而丢掉内存缓冲、放大故障。
+      #
+      # 两个分组的判据不同：
+      #   liveness  —— 进程自己是否还活着，只看 ping / diskSpace。
+      #                它失败才应该重启 Pod。
+      #   readiness —— 能否接流量，含 db 与业务指示器 mqsPg。
+      #                PG 挂了、消费闸门全关，就该摘流量但**不要**重启。
+      # ------------------------------------------------------------------
+      group:
+        liveness:
+          include: ping,diskSpace
+        readiness:
+          include: db,mqsPg
   metrics:
     tags:
       application: mqs-pg
