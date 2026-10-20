@@ -28,8 +28,20 @@ public record ReplayOutcome(
         ROW_FAILURE,
         /** 转换阶段就失败（数据级）。 */
         DATA_ERROR,
-        /** 绑定版本的配置已不可用。 */
+        /**
+         * 绑定版本**暂**不可用（数据库抖动、路由暂无生效版本）。
+         *
+         * <p>与 {@link #CONFIG_GONE} 的差别是「等一下可能就好了」：
+         * 这类不消耗次数，无限缓冲。
+         */
         CONFIG_MISSING,
+        /**
+         * 绑定版本**永久**不可用（版本已被删除、路由/目标表已被删除）。
+         *
+         * <p>重试不会改变结果，但也不该立刻丢：运维可能正要恢复版本，
+         * 因此给有限次缓冲，超过才进 DLQ。
+         */
+        CONFIG_GONE,
         /** PG 级故障。 */
         PG_FAILURE
     }
@@ -53,6 +65,17 @@ public record ReplayOutcome(
 
     public static ReplayOutcome configMissing(String message) {
         return new ReplayOutcome(Kind.CONFIG_MISSING, null, "CONFIG_MISSING", message, null);
+    }
+
+    /**
+     * 绑定版本确定已不存在。
+     *
+     * <p>错误码用 {@code CONFIG_GONE} 而不是 {@code CONFIG_MISSING}：
+     * 前者是全项目唯一的「永久失效」信号，运维按这个码搜日志就能找到
+     * 「为什么这条任务进了 DLQ」。
+     */
+    public static ReplayOutcome configGone(String message) {
+        return new ReplayOutcome(Kind.CONFIG_GONE, null, "CONFIG_GONE", message, null);
     }
 
     public static ReplayOutcome pgFailure(Throwable cause) {

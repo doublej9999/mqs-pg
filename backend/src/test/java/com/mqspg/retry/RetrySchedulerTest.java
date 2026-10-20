@@ -108,7 +108,7 @@ class RetrySchedulerTest extends AbstractPgIntegrationTest {
     }
 
     @Test
-    @DisplayName("绑定版本不存在 → 不消耗重试次数（系统级问题）")
+    @DisplayName("绑定版本不存在 → 前几轮只缓冲、不消耗次数")
     void missingConfigDoesNotConsumeAttempt() {
         long id = 980063L;
         // 版本 999 不存在。若实现「回退到 ACTIVE 版本」，这次重放就会成功 ——
@@ -119,10 +119,41 @@ class RetrySchedulerTest extends AbstractPgIntegrationTest {
         scheduler.processOne(task);
 
         RtRetryTask after = retryTaskMapper.selectById(task.getId());
-        assertEquals("PENDING", after.getStatus());
+        assertEquals("PENDING", after.getStatus(), "缓冲期内仍应待重试");
         assertEquals(3, after.getAttempt(), "配置缺失不得消耗重试次数");
+        assertEquals("CONFIG_GONE", after.getErrorCode());
+        assertTrue(after.getErrorMessage().startsWith("[configGone=1]"),
+                "应记下缓冲轮次，实际: " + after.getErrorMessage());
         assertNotNull(after.getNextRetryAt());
         assertNull(nameOf(id), "绑定版本不可用时绝不能落库");
+    }
+
+    @Test
+    @DisplayName("绑定版本不存在 → 缓冲轮数用尽后进 DLQ，不再无限重试")
+    void missingConfigEventuallyGoesToDlq() {
+        long id = 980069L;
+        // 版本 999 永远不存在：这正是修复前的「断头路」——
+        // 每轮都「暂时失败」、next_retry_at 只往后推，任务永不进 DLQ，表只增不减。
+        RtRetryTask task = insert("rtt-gone", payload(id, "gone", "1.00", "PAID",
+                "2026-04-12T10:00:00+08:00"), 1, 10, 999);
+
+        // 缓冲上限默认 3 轮：第 1..3 轮留在 PENDING，第 4 轮进 DLQ
+        for (int round = 1; round <= 3; round++) {
+            scheduler.processOne(task);
+            RtRetryTask mid = retryTaskMapper.selectById(task.getId());
+            assertEquals("PENDING", mid.getStatus(), "第 %d 轮应仍在缓冲".formatted(round));
+            task = mid;
+        }
+        scheduler.processOne(task);
+
+        RtRetryTask after = retryTaskMapper.selectById(task.getId());
+        assertEquals("DLQ", after.getStatus(), "缓冲耗尽后必须进 DLQ，而不是永远 PENDING");
+        assertEquals(1, after.getAttempt(), "永久缺失不得消耗重试次数");
+
+        Integer finals = jdbc.queryForObject(
+                "SELECT count(*) FROM mqs_pg.rt_error_record WHERE message_id = 'rtt-gone' AND is_final = true",
+                Integer.class);
+        assertEquals(1, finals, "进 DLQ 必须留下可查询的终态流水");
     }
 
     @Test

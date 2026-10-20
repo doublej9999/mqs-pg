@@ -123,10 +123,16 @@ public class RouteController {
         return ApiResponse.ok(admin.publishVersion(routeId, version));
     }
 
-    /** 删除版本。ACTIVE 版本与当前生效版本不可删。 */
+    /**
+     * 删除版本。ACTIVE 版本与当前生效版本不可删。
+     *
+     * @param force 还有未完成的重试任务绑定在该版本上时默认拒绝，确认丢弃才传 true
+     */
     @DeleteMapping("/{routeId}/versions/{version}")
-    public ApiResponse<Void> deleteVersion(@PathVariable long routeId, @PathVariable int version) {
-        admin.deleteVersion(routeId, version);
+    public ApiResponse<Void> deleteVersion(@PathVariable long routeId,
+                                           @PathVariable int version,
+                                           @RequestParam(defaultValue = "false") boolean force) {
+        admin.deleteVersion(routeId, version, force);
         return ApiResponse.ok();
     }
 

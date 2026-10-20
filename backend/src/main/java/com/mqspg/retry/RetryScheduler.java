@@ -86,10 +86,33 @@ public class RetryScheduler {
             case SUCCESS -> retryService.markSucceeded(task, String.valueOf(outcome.action()));
 
             case CONFIG_MISSING, PG_FAILURE ->
-                    // 系统级问题：不消耗次数，稍后自动重来。
+                    // 系统级问题（可能自愈）：不消耗次数，稍后自动重来。
                     // 刻意不触碰 PgHealthGate —— 闸门的职责是暂停「消费」，
                     // 而重试路径没有对应的消费者可暂停，报进去只会污染闸门状态。
                     retryService.releaseForRetry(task, outcome.errorMessage());
+
+            case CONFIG_GONE -> {
+                // 绑定的版本确实没了：重试不会改变结果，但也不该立刻丢 ——
+                // 运维可能正要恢复那个版本。给它 configGoneBuffer 轮缓冲，
+                // 超过就进 DLQ 并留一条终态错误流水。
+                // 没有这条分支时，这类任务每轮都「暂时失败」，next_retry_at 只往后推，
+                // 永远不消耗次数、永远进不了 DLQ：任务表只增不减，每分钟刷一条 warn。
+                int seen = configGoneCount(task) + 1;
+                int limit = Math.max(0, props.getConfigGoneBuffer());
+                if (seen > limit) {
+                    // 不消耗次数的终态：attempt 保持原值，
+                    // 否则会被误读成「试满 10 次才放弃」，而实际是第 1 轮就发现版本没了
+                    retryService.markGoneTerminal(task, "CONFIG_GONE", outcome.errorMessage());
+                    deadLetterSink.send(RetryMessage.of(task), new FailureMeta(
+                            ErrorStage.RETRY.name(), "CONFIG_GONE", outcome.errorMessage(), seen));
+                    log.error("绑定配置永久缺失，重试 {} 轮后转入 DLQ: id={} route={} version={}",
+                            seen, task.getId(), task.getRouteId(), task.getConfigVersion());
+                } else {
+                    retryService.holdForConfig(task, outcome.errorMessage(), seen);
+                    log.warn("绑定配置缺失，缓冲 {}/{}: id={} route={} version={}",
+                            seen, limit, task.getId(), task.getRouteId(), task.getConfigVersion());
+                }
+            }
 
             case ROW_FAILURE, DATA_ERROR -> {
                 int nextAttempt = (task.getAttempt() == null ? 0 : task.getAttempt()) + 1;
@@ -104,4 +127,33 @@ public class RetryScheduler {
             }
         }
     }
+
+    /**
+     * 读「已经缓冲过几轮」。
+     *
+     * <p>不新增列：计数写在 {@code error_message} 的前缀里。
+     * 加一列要走迁移，而这个数字纯属运行时诊断信息，
+     * 且 {@code error_message} 本来就只给人看 —— 塞一个结构化前缀不会影响任何查询。
+     * 前缀不存在时视为 0（老任务从 0 开始算）。
+     */
+    static int configGoneCount(RtRetryTask task) {
+        String msg = task.getErrorMessage();
+        if (msg == null || !msg.startsWith(CONFIG_GONE_PREFIX)) {
+            return 0;
+        }
+        int end = msg.indexOf(']');
+        if (end < 0) {
+            return 0;
+        }
+        try {
+            // 前缀本身已包含 '='，因此从 length() 处开始就是数字。
+            // （早先误写成 length() + 1，切出空串 → 解析失败 → 计数恒为 0，
+            // 任务永远进不了 DLQ —— 与这个修复要解决的症状一模一样。）
+            return Integer.parseInt(msg.substring(CONFIG_GONE_PREFIX.length(), end).trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    static final String CONFIG_GONE_PREFIX = "[configGone=";
 }

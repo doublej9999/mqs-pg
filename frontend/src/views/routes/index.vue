@@ -792,8 +792,25 @@ async function onDeleteVersion(row) {
     await deleteVersion(current.value.id, row.version)
     ElMessage.success('已删除')
     await reloadVersions()
-  } catch {
-    // 请求层已提示
+  } catch (e) {
+    // 有未完成的重试任务绑在这个版本上时后端会拒绝（CONFLICT），
+    // 删掉它们就永远重放不成了，所以要再确认一次
+    if (e?.code !== 'CONFLICT') {
+      return
+    }
+    const force = await confirmAction(
+      '该版本还有未完成的重试任务绑定在它上面，删除后这些任务将无法重放（会进 DLQ）。确认丢弃？',
+      '存在未完成的重试任务',
+      { confirmButtonText: '仍然删除' }
+    )
+    if (!force) return
+    try {
+      await deleteVersion(current.value.id, row.version, true)
+      ElMessage.success('已删除')
+      await reloadVersions()
+    } catch {
+      // 请求层已提示
+    }
   }
 }
 

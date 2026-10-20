@@ -6,6 +6,55 @@
 
 ---
 
+#
+## 2026-10-20 · G3 版本删除后重试任务永久卡死（补终态出口）
+
+- **背景**
+  - 重放按**任务绑定的版本**取配置（`RetryReplayer`）。取不到时返回 `configMissing`，
+    调度器把它归入「系统级问题」交给 `releaseForRetry` —— 而那个方法**不递增 attempt**，
+    只把 `next_retry_at` 往后推 `3 × pollInterval`。
+  - 于是删掉一个还有重试任务绑定的版本后：任务每轮都「暂时失败」，永远不消耗次数、
+    永远进不了 DLQ，`rt_retry_task` 只增不减，且每分钟刷一条 warn。
+    这是本轮唯一「稳定泄漏资源」的缺陷。
+
+- **改动**
+  - `ReplayOutcome.Kind` 拆出 `CONFIG_GONE`（永久）与保留的 `CONFIG_MISSING`（临时）。
+  - `RetryReplayer` 增「二次确认」：注册表拿不到快照时，直接查一次 `cfg_version`
+    确认这个版本号是不是真的没了。查询本身抛异常一律按「不确定」处理（走 `CONFIG_MISSING`）——
+    宁可多等几轮，也不在数据库抖动时把消息误推进 DLQ。这条是 §6 之外最容易做错的地方。
+  - 新增 `ErrorCode.CONFIG_GONE`（DATA 级）：不回退 MQ 重投、不暂停消费，
+    只决定这条重试任务能撑几轮。
+  - `RetryProperties.configGoneBuffer`（默认 3）：允许缓冲几轮等运维恢复版本，超过才进 DLQ。
+    不是 0 是因为运维可能正要重新发布同一版本号，直接丢消息比多留几分钟更糟。
+  - 缓冲计数写在 `error_message` 前缀 `[configGone=N]`，不新增列 ——
+    它纯属运行时诊断信息，加列要走迁移，而这个字段本来就只给人看。
+  - `RetryService.holdForConfig` 负责写前缀；`markGoneTerminal` 是「不消耗次数」的终态入口
+    （原 `markExhausted` 会把 `attempt` 写成 `maxAttempt`，让人误以为试满 10 次才放弃）。
+  - `deleteVersion` 增加预检：还有未完成重试任务绑在该版本上时抛 `CONFLICT`，
+    `force=true` 才放行；`RouteController` 的 DELETE 增 `force` 参数，前端补二次确认。
+  - 前端 `api/routes.js` 的 `deleteVersion` 增 `force`；`routes/index.vue` 改判 `CONFLICT`。
+
+- **验证**
+  - `RetrySchedulerTest.missingConfigEventuallyGoesToDlq`（新增）：连跑 4 轮，
+    前 3 轮断言仍 PENDING，第 4 轮断言 DLQ 且 `rt_error_record` 有一条 `is_final=true`，
+    同时断言 `attempt` 未被改写。
+  - `missingConfigDoesNotConsumeAttempt`（改写）：断言第一轮记下 `[configGone=1]` 前缀。
+  - `ConfigAdminTest.deleteVersionBlockedWhenRetryTasksBound`（新增）：有绑定任务时
+    抛 `CONFLICT`，`force=true` 放行。
+  - 实现中两次被这两个用例抓住：
+    ① `substring(CONFIG_GONE_PREFIX.length() + 1, end)` 切出空串 → 计数恒为 0 →
+    任务永远进不了 DLQ（症状与被修的缺陷一模一样）；② `markExhausted` 把 attempt 写成 10。
+  - `mvn test`：56 passed（54 + 本次 2 条）；`pnpm build` 通过。
+
+- **影响与回滚**
+  - 「配置缺失」的语义边界变清晰：临时抖动仍无限缓冲，确认版本没了才有限缓冲。
+    代价是每次配置缺失多一次单行查询 —— 只在失败路径上，可忽略。
+  - 删版本从「静默让任务烂掉」变成「先问一次」，与路由删除的 force 语义一致。
+  - 回滚：`RetryScheduler` 的 `CONFIG_GONE` 分支并回 `CONFIG_MISSING → releaseForRetry`，
+    去掉 `deleteVersion` 的预检与 `force` 参数。
+
+---
+
 ## 2026-10-20 · K1 前端字段契约：补「本次启动以来」计数，枚举改由 /api/meta 下发
 
 - **背景**

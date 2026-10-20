@@ -218,26 +218,71 @@ public class RetryService {
                 task.getId(), task.getMessageId(), task.getAttempt(), reason);
     }
 
+    /**
+     * 绑定配置永久缺失，**缓冲**等待人工修复。
+     *
+     * <p>与 {@link #releaseForRetry} 的区别只有一处：把「已经缓冲了几轮」记进
+     * {@code error_message} 的前缀，调度器下一轮据此判断是否该进 DLQ。
+     * 不新增列是因为这个数字纯属运行时诊断信息，加列要走迁移；
+     * 而 {@code error_message} 本来就只给人看，塞一个结构化前缀不影响任何查询。
+     *
+     * @param seen 本次是第几轮（从 1 开始）
+     */
+    public void holdForConfig(RtRetryTask task, String reason, int seen) {
+        OffsetDateTime now = OffsetDateTime.now();
+        long backoffMs = Math.max(1000L, props.getPollInterval().toMillis() * 3);
+        String marked = "[configGone=%d] %s".formatted(seen, reason);
+        apply(transition(task.getId())
+                .set(RtRetryTask::getStatus, "PENDING")
+                .set(RtRetryTask::getErrorCode, "CONFIG_GONE")
+                .set(RtRetryTask::getErrorMessage, truncate(marked))
+                .set(RtRetryTask::getLastErrorAt, now)
+                .set(RtRetryTask::getNextRetryAt, now.plusNanos(backoffMs * 1_000_000L))
+                .set(RtRetryTask::getLeaseUntil, null)
+                .set(RtRetryTask::getUpdatedAt, now), task.getId());
+        log.warn("绑定配置缺失，缓冲等待恢复（第 {} 轮）: id={} message={} 原因={}",
+                seen, task.getId(), task.getMessageId(), reason);
+    }
+
     /** 次数耗尽 → 终态 DLQ，并留下可查询的终态错误流水。 */
     public void markExhausted(RtRetryTask task, String errorCode, String errorMessage) {
+        markTerminal(task, errorCode, errorMessage, true);
+    }
+
+    /**
+     * 终态 DLQ，**不消耗**（也不改写）重试次数。
+     *
+     * <p>用于「绑定配置永久缺失」这类与次数无关的终态：任务的 {@code attempt}
+     * 保持原值，{@code max_attempt} 也不动 —— 把 attempt 写成 maxAttempt 会让人
+     * 以为「试满 10 次才放弃」，而实际是第 1 次就发现版本没了。
+     */
+    public void markGoneTerminal(RtRetryTask task, String errorCode, String errorMessage) {
+        markTerminal(task, errorCode, errorMessage, false);
+    }
+
+    private void markTerminal(RtRetryTask task, String errorCode, String errorMessage,
+                              boolean consumeAttempt) {
         OffsetDateTime now = OffsetDateTime.now();
-        apply(transition(task.getId())
+        LambdaUpdateWrapper<RtRetryTask> update = transition(task.getId())
                 .set(RtRetryTask::getStatus, "DLQ")
-                .set(RtRetryTask::getAttempt, task.getMaxAttempt())
                 .set(RtRetryTask::getErrorCode, errorCode)
                 .set(RtRetryTask::getErrorMessage, truncate(errorMessage))
                 .set(RtRetryTask::getLastErrorAt, now)
                 .set(RtRetryTask::getLeaseUntil, null)
-                .set(RtRetryTask::getUpdatedAt, now), task.getId());
+                .set(RtRetryTask::getUpdatedAt, now);
+        if (consumeAttempt) {
+            update.set(RtRetryTask::getAttempt, task.getMaxAttempt());
+        }
+        apply(update, task.getId());
 
         MqsMessage view = RetryMessage.of(task);
         recordError(view, task.getRouteId(), task.getConfigVersion(),
                 errorCode, ErrorStage.RETRY.name(), errorMessage,
                 task.getMaxAttempt(), true);
 
-        log.error("重试次数耗尽，进入 DLQ: id={} route={} message={} attempt={} code={} 原因={}",
+        log.error("重试进入终态 DLQ: id={} route={} message={} attempt={} code={} 原因={}",
                 task.getId(), task.getRouteId(), task.getMessageId(),
-                task.getMaxAttempt(), errorCode, errorMessage);
+                task.getAttempt(), errorCode, errorMessage);
     }
 
     /** 手工取消（控制台操作）。 */

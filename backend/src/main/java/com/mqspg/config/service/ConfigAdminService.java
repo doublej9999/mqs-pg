@@ -477,7 +477,7 @@ public class ConfigAdminService {
     }
 
     @Transactional
-    public void deleteVersion(long routeId, int version) {
+    public void deleteVersion(long routeId, int version, boolean force) {
         CfgRoute route = requireRoute(routeId);
         CfgVersion v = requireVersion(routeId, version);
         if (route.getActiveVersion() != null && route.getActiveVersion() == version) {
@@ -488,8 +488,20 @@ public class ConfigAdminService {
             throw new ProcessingException(ErrorCode.CONFIG_MISSING,
                     "版本 %d 处于 ACTIVE，不可删除".formatted(version));
         }
+        // 还有活跃重试任务绑在这个版本上时，删掉它会让那些任务永远重放不成。
+        // 调度器会给它们缓冲几轮再进 DLQ（G3），但那等于把本可成功的消息丢了 ——
+        // 所以先拦住，让调用方知道代价；确实要删就显式 force。
+        Long bound = retryTaskMapper.selectCount(Wrappers.<RtRetryTask>lambdaQuery()
+                .eq(RtRetryTask::getRouteId, routeId)
+                .eq(RtRetryTask::getConfigVersion, version)
+                .in(RtRetryTask::getStatus, UNFINISHED_RETRY_STATUSES));
+        if (bound != null && bound > 0 && !force) {
+            throw new ProcessingException(ErrorCode.CONFLICT,
+                    "版本 %d 还有 %d 条未完成的重试任务绑定在它上面，删除后这些任务将无法重放；"
+                            .formatted(version, bound) + "确认丢弃可加 force=true");
+        }
         versionMapper.deleteById(v.getId());
-        log.info("配置版本已删除: route={} version={}", routeId, version);
+        log.info("配置版本已删除: route={} version={} 绑定任务={}", routeId, version, bound);
     }
 
     /**

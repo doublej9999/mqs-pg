@@ -37,6 +37,17 @@ public enum ErrorCode {
     // ---- 系统类 ----
     CONFIG_MISSING(ErrorStage.RECEIVE, ErrorSeverity.FATAL),
     /**
+     * 重试任务绑定的配置版本**永久**不可用（版本被删、路由被删、目标表被删）。
+     *
+     * <p>与 {@link #CONFIG_MISSING} 的区别是「临时」还是「永久」：配置读取时的
+     * 数据库抖动、路由暂时没有 ACTIVE 版本，都属于**临时**问题，等下一轮就好；
+     * 而绑定的那个版本号已经不在库里了，重试一万次也不会回来。
+     *
+     * <p>严重度取 {@code DATA} 而不是 {@code FATAL}：它不回退到 MQ 重投、
+     * 也不暂停消费，只决定这条重试任务能撑几轮缓冲后进 DLQ。
+     */
+    CONFIG_GONE(ErrorStage.RECEIVE, ErrorSeverity.DATA),
+    /**
      * 当前状态下不允许该操作（如「路由还有未完成的重试任务」）。
      *
      * <p>与 {@link #CONFIG_MISSING} 的区别是**语义**而不是严重度：调用方需要据此

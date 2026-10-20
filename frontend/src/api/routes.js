@@ -61,8 +61,12 @@ export function publishVersion(routeId, version) {
   return request({ url: `/routes/${routeId}/versions/${version}/publish`, method: 'post' })
 }
 
-export function deleteVersion(routeId, version) {
-  return request({ url: `/routes/${routeId}/versions/${version}`, method: 'delete' })
+export function deleteVersion(routeId, version, force = false) {
+  return request({
+    url: `/routes/${routeId}/versions/${version}`,
+    method: 'delete',
+    params: { force }
+  })
 }
 
 export function activateVersion(routeId, version) {

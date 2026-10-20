@@ -37,6 +37,19 @@ public class RetryProperties {
     private Duration leaseDuration = Duration.ofMinutes(5);
 
     /**
+     * 绑定配置**永久**缺失时允许缓冲的轮数，超过即进 DLQ。
+     *
+     * <p>为什么需要这个上限：重试任务按**任务绑定的版本**取配置，
+     * 版本被删后每轮重放都失败。若把它当作「暂时问题」无限释放，
+     * {@code next_retry_at} 只会往后推，任务永远不消耗次数、永远进不了 DLQ ——
+     * 表只增不减，且每分钟刷一条 warn。
+     *
+     * <p>为什么不是 0：运维可能正要恢复那个版本（重新发布同一版本号），
+     * 直接丢消息比多留几分钟更糟。3 轮 ≈ 3 × 3 × pollInterval。
+     */
+    private int configGoneBuffer = 3;
+
+    /**
      * 是否重试 DATA 类错误（tech-design 附录 C-01）。
      *
      * <p>默认 false：转换/解析类错误由消息内容决定，重试必然失败。

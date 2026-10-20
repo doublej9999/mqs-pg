@@ -341,9 +341,53 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         configService.activate(route.id(), draft.version());
 
         ProcessingException e = assertThrows(ProcessingException.class,
-                () -> admin.deleteVersion(route.id(), draft.version()));
+                () -> admin.deleteVersion(route.id(), draft.version(), false));
         assertTrue(e.getMessage().contains("生效版本"), e.getMessage());
 
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    @Test
+    @DisplayName("版本上还有未完成的重试任务时默认拒绝删除，force 才放行")
+    void deleteVersionBlockedWhenRetryTasksBound() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-bd", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-bd", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-bd", TOPIC + "bd", TAG, target.id()));
+
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+        configService.activate(route.id(), v1);
+
+        // 造一条绑在 v1 上的活跃重试任务（状态 PENDING 即「未完成」）
+        jdbc.update("""
+                INSERT INTO rt_retry_task
+                    (route_id, config_version, message_id, topic, tag, error_stage, error_code,
+                     attempt, max_attempt, next_retry_at, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'WRITE', 'PG_CONSTRAINT_VIOLATION',
+                        0, 10, now(), 'PENDING', now(), now())
+                """, route.id(), v1, PREFIX + "msg-bd", TOPIC + "bd", TAG);
+
+        // 先把 v2 建出来并激活，让 v1 变成可删的 INACTIVE
+        int v2 = admin.createVersion(route.id()).version();
+        admin.publishVersion(route.id(), v2);
+        configService.activate(route.id(), v2);
+
+        ProcessingException e = assertThrows(ProcessingException.class,
+                () -> admin.deleteVersion(route.id(), v1, false));
+        assertEquals(com.mqspg.common.error.ErrorCode.CONFLICT, e.getCode(),
+                "应抛 CONFLICT，前端据此弹「仍然删除」");
+        assertTrue(e.getMessage().contains("重试任务"), e.getMessage());
+
+        // force 放行
+        admin.deleteVersion(route.id(), v1, true);
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT count(*) FROM cfg_version WHERE route_id = ? AND version = ?",
+                Integer.class, route.id(), v1));
+
+        jdbc.update("DELETE FROM rt_retry_task WHERE message_id = ?", PREFIX + "msg-bd");
         admin.deleteRoute(route.id(), true);
         admin.deleteTarget(target.id());
         admin.deleteDatasource(ds.id());
