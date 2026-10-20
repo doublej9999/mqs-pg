@@ -1,5 +1,18 @@
 package com.mqspg.config.registry;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+
+import jakarta.annotation.PostConstruct;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
@@ -10,19 +23,9 @@ import com.mqspg.config.entity.CfgVersion;
 import com.mqspg.config.mapper.CfgRouteMapper;
 import com.mqspg.config.mapper.CfgTargetMapper;
 import com.mqspg.config.mapper.CfgVersionMapper;
-import jakarta.annotation.PostConstruct;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
-
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 基于数据库的配置注册表实现。

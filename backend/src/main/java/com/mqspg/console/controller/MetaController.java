@@ -1,18 +1,20 @@
 package com.mqspg.console.controller;
 
-import com.mqspg.common.api.ApiResponse;
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ErrorStage;
-import com.mqspg.consumer.ConsumerStateRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.mqspg.common.api.ApiResponse;
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ErrorStage;
+import com.mqspg.consumer.ConsumerStateRepository;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * 枚举与元数据的只读视图。

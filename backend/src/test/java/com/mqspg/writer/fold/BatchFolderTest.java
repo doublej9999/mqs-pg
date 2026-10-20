@@ -1,17 +1,18 @@
 package com.mqspg.writer.fold;
 
-import com.mqspg.common.model.KeyTuple;
-import com.mqspg.common.model.TargetRow;
-import com.mqspg.mqs.FakeMessage;
-import com.mqspg.writer.batch.BufferedMessage;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.mqspg.common.model.KeyTuple;
+import com.mqspg.common.model.TargetRow;
+import com.mqspg.mqs.FakeMessage;
+import com.mqspg.writer.batch.BufferedMessage;
 
 /**
  * 折叠算法测试（tech-design §7.3 / ADR-05）。

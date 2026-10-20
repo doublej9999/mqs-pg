@@ -1,8 +1,15 @@
 package com.mqspg.retry;
 
-import com.mqspg.retry.entity.RtRetryTask;
-import com.mqspg.retry.mapper.RtRetryTaskMapper;
-import com.mqspg.support.AbstractPgIntegrationTest;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.List;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,15 +18,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.time.OffsetDateTime;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.mqspg.retry.entity.RtRetryTask;
+import com.mqspg.retry.mapper.RtRetryTaskMapper;
+import com.mqspg.support.AbstractPgIntegrationTest;
 
 /**
  * 重试调度器测试（阶段 6）。

@@ -1,13 +1,14 @@
 package com.mqspg.consumer;
 
-import com.mqspg.metrics.MqsMetrics;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.mqspg.metrics.MqsMetrics;
 
 /**
  * PG 健康闸门的边界测试（里程碑 H5）。

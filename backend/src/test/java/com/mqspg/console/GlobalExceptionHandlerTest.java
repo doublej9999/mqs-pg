@@ -1,8 +1,9 @@
 package com.mqspg.console;
 
-import com.mqspg.common.api.ApiResponse;
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ProcessingException;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -10,9 +11,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.mqspg.common.api.ApiResponse;
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
 
 /**
  * 异常映射测试（里程碑 H4）。

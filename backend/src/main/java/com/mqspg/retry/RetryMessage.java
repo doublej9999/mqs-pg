@@ -1,9 +1,9 @@
 package com.mqspg.retry;
 
+import java.time.Instant;
+
 import com.mqspg.mqs.spi.MqsMessage;
 import com.mqspg.retry.entity.RtRetryTask;
-
-import java.time.Instant;
 
 /**
  * 从重试任务还原出的消息视图。

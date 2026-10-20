@@ -1,6 +1,5 @@
 package com.mqspg.common.model;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;

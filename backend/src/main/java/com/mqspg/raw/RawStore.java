@@ -1,14 +1,5 @@
 package com.mqspg.raw;
 
-import com.mqspg.common.persistence.JsonbTypeHandler;
-import com.mqspg.metrics.MqsMetrics;
-import com.mqspg.mqs.spi.MqsMessage;
-import com.mqspg.writer.batch.BufferedMessage;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.BatchPreparedStatementSetter;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
 import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -22,6 +13,17 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
+import com.mqspg.common.persistence.JsonbTypeHandler;
+import com.mqspg.metrics.MqsMetrics;
+import com.mqspg.mqs.spi.MqsMessage;
+import com.mqspg.writer.batch.BufferedMessage;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 原始消息留存（tech-design §11，PRD §29）。

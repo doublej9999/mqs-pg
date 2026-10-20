@@ -1,5 +1,20 @@
 package com.mqspg.pipeline;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Duration;
+import java.util.function.BooleanSupplier;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
+
 import com.mqspg.config.registry.ConfigRegistry;
 import com.mqspg.consumer.ConsumerStateRepository;
 import com.mqspg.consumer.PgHealthGate;
@@ -13,20 +28,6 @@ import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BatchManager;
 import com.mqspg.writer.batch.BatchProperties;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.TestPropertySource;
-
-import java.time.Duration;
-import java.util.function.BooleanSupplier;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 真实消费循环的集成测试：启动 {@link RouteConsumer} 后台线程，

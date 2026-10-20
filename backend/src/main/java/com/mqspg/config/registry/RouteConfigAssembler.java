@@ -1,5 +1,13 @@
 package com.mqspg.config.registry;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mqspg.common.model.MappingDef;
 import com.mqspg.common.model.MappingStrategy;
@@ -8,13 +16,6 @@ import com.mqspg.common.model.TargetRef;
 import com.mqspg.common.model.TransformSpec;
 import com.mqspg.config.entity.CfgTarget;
 import com.mqspg.config.entity.CfgVersion;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * 将 {@code cfg_version.content}（JSONB 快照）+ {@code cfg_target} 装配为 {@link RouteConfig}。

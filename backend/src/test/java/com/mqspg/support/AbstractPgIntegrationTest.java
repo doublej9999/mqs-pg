@@ -1,6 +1,6 @@
 package com.mqspg.support;
 
-import com.mqspg.writer.datasource.TargetDataSourceRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,7 +9,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-import org.junit.jupiter.api.BeforeEach;
+import com.mqspg.writer.datasource.TargetDataSourceRegistry;
 
 /**
  * 集成测试基类（里程碑 D1）：用 Testcontainers 起一个真实的 PostgreSQL，

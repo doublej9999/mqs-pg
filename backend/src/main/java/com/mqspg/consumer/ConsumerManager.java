@@ -1,10 +1,25 @@
 package com.mqspg.consumer;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import jakarta.annotation.PreDestroy;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.mqspg.common.model.RouteConfig;
 import com.mqspg.config.entity.CfgRoute;
 import com.mqspg.config.mapper.CfgRouteMapper;
 import com.mqspg.config.registry.ConfigRegistry;
-import com.mqspg.common.model.RouteConfig;
 import com.mqspg.metrics.MqsMetrics;
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
@@ -12,21 +27,9 @@ import com.mqspg.mqs.spi.MqsConsumerFactory;
 import com.mqspg.writer.batch.BatchManager;
 import com.mqspg.writer.batch.BatchProperties;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
-import jakarta.annotation.PreDestroy;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * 消费生命周期管理（tech-design §4.3 / §41）。

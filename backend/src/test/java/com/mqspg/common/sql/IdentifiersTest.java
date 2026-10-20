@@ -1,17 +1,18 @@
 package com.mqspg.common.sql;
 
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ProcessingException;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
 
 /**
  * 标识符白名单测试（里程碑 I4）。

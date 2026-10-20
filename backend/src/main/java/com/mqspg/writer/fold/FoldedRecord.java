@@ -1,10 +1,10 @@
 package com.mqspg.writer.fold;
 
-import com.mqspg.common.model.KeyTuple;
-import com.mqspg.common.model.TargetRow;
-
 import java.util.ArrayList;
 import java.util.List;
+
+import com.mqspg.common.model.KeyTuple;
+import com.mqspg.common.model.TargetRow;
 
 /**
  * 折叠结果：一个 Upsert Key 对应一条最终写入行。

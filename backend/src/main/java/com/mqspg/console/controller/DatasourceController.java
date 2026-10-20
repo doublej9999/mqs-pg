@@ -1,16 +1,11 @@
 package com.mqspg.console.controller;
 
-import com.mqspg.common.api.ApiResponse;
-import com.mqspg.config.dto.ColumnDto;
-import com.mqspg.config.dto.ConnectionTestDto;
-import com.mqspg.config.dto.DatasourceDto;
-import com.mqspg.config.dto.DatasourceRequest;
-import com.mqspg.config.service.ConfigAdminService;
-import com.mqspg.config.service.IntrospectionService;
-import lombok.RequiredArgsConstructor;
+import java.util.List;
+
+import jakarta.validation.Valid;
+
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -19,7 +14,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+import com.mqspg.common.api.ApiResponse;
+import com.mqspg.config.dto.ColumnDto;
+import com.mqspg.config.dto.ConnectionTestDto;
+import com.mqspg.config.dto.DatasourceDto;
+import com.mqspg.config.dto.DatasourceRequest;
+import com.mqspg.config.service.ConfigAdminService;
+import com.mqspg.config.service.IntrospectionService;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * 数据源与目标库结构探查 API。

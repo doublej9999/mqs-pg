@@ -1,11 +1,13 @@
 package com.mqspg.mqs.mock;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
 import com.mqspg.mqs.spi.ConsumerSpec;
 import com.mqspg.mqs.spi.MqsConsumer;
 import com.mqspg.mqs.spi.MqsConsumerFactory;
+
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
 
 /** 内存 MQ 实现。{@code mqs-pg.mqs.vendor=mock}（默认）时生效。 */
 @Component

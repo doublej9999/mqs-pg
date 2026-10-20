@@ -1,8 +1,5 @@
 package com.mqspg.mqs.mock;
 
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -12,6 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.stereotype.Component;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 进程内消息代理，模拟平台 MQS 的「批量拉取 + 显式 ACK + 不可见时长」语义。

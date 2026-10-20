@@ -1,5 +1,21 @@
 package com.mqspg.writer;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
+
 import com.mqspg.common.model.KeyTuple;
 import com.mqspg.common.model.MergeAction;
 import com.mqspg.common.model.RouteConfig;
@@ -9,25 +25,10 @@ import com.mqspg.mqs.FakeMessage;
 import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
-import com.mqspg.writer.sql.MergeSqlBuilder;
 import com.mqspg.writer.fold.BatchFolder;
 import com.mqspg.writer.fold.CandidateRecord;
 import com.mqspg.writer.fold.FoldedRecord;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.TestPropertySource;
-
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
+import com.mqspg.writer.sql.MergeSqlBuilder;
 
 /**
  * PG Writer 集成测试，直接打真实 PostgreSQL（tech-design §18）。

@@ -1,16 +1,11 @@
 package com.mqspg.config;
 
-import com.mqspg.config.registry.ConfigRegistry;
-import com.mqspg.config.service.ConfigAdminService;
-import com.mqspg.config.service.ConfigService;
-import com.mqspg.config.dto.DatasourceDto;
-import com.mqspg.config.dto.DraftDto;
-import com.mqspg.config.dto.DatasourceRequest;
-import com.mqspg.config.dto.RouteRequest;
-import com.mqspg.config.dto.RouteSummaryDto;
-import com.mqspg.config.dto.TargetDto;
-import com.mqspg.config.dto.TargetRequest;
-import com.mqspg.support.AbstractPgIntegrationTest;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
+import java.util.List;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,11 +14,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import com.mqspg.config.dto.DatasourceDto;
+import com.mqspg.config.dto.DatasourceRequest;
+import com.mqspg.config.dto.DraftDto;
+import com.mqspg.config.dto.RouteRequest;
+import com.mqspg.config.dto.RouteSummaryDto;
+import com.mqspg.config.dto.TargetDto;
+import com.mqspg.config.dto.TargetRequest;
+import com.mqspg.config.registry.ConfigRegistry;
+import com.mqspg.config.service.ConfigAdminService;
+import com.mqspg.config.service.ConfigService;
+import com.mqspg.support.AbstractPgIntegrationTest;
 
 /**
  * 配置注册表的生命周期测试（里程碑 G7）。

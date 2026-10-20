@@ -1,20 +1,22 @@
 package com.mqspg.writer.metadata;
 
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ProcessingException;
-import com.mqspg.common.model.TargetRef;
-import com.mqspg.writer.datasource.TargetDataSourceRegistry;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
 import java.sql.Array;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
+import com.mqspg.common.model.TargetRef;
+import com.mqspg.writer.datasource.TargetDataSourceRegistry;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 读取并缓存目标表结构。

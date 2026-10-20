@@ -1,6 +1,8 @@
 package com.mqspg.console;
 
-import com.mqspg.support.AbstractPgIntegrationTest;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,8 +11,7 @@ import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.test.context.TestPropertySource;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import com.mqspg.support.AbstractPgIntegrationTest;
 
 /**
  * 健康分组测试（里程碑 H7）。

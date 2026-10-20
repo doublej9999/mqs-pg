@@ -1,10 +1,11 @@
 package com.mqspg.writer.batch;
 
-import lombok.Data;
+import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
+import lombok.Data;
 
 /** 批次参数（PRD §9：条数或时间先到者为准）。 */
 @Data

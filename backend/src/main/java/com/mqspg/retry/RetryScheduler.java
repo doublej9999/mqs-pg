@@ -1,5 +1,13 @@
 package com.mqspg.retry;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
 import com.mqspg.common.error.ErrorStage;
 import com.mqspg.common.logging.MdcScope;
 import com.mqspg.common.model.KeyTuple;
@@ -10,15 +18,9 @@ import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
 import com.mqspg.writer.MergeResult;
 import com.mqspg.writer.PgWriter;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * 重试调度器（tech-design §10，ADR-02）。

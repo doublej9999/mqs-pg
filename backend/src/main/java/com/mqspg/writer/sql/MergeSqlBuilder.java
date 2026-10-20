@@ -1,16 +1,17 @@
 package com.mqspg.writer.sql;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.stereotype.Component;
+
 import com.mqspg.common.model.TargetRef;
 import com.mqspg.common.model.TargetRow;
 import com.mqspg.common.sql.Identifiers;
 import com.mqspg.writer.fold.FoldedRecord;
 import com.mqspg.writer.metadata.TargetTableMeta;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 生成 {@code MERGE ... RETURNING merge_action()}（ADR-04）。

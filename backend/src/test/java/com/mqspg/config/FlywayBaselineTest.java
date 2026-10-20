@@ -1,6 +1,11 @@
 package com.mqspg.config;
 
-import com.mqspg.support.AbstractPgIntegrationTest;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import javax.sql.DataSource;
+
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.DisplayName;
@@ -8,11 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import javax.sql.DataSource;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.mqspg.support.AbstractPgIntegrationTest;
 
 /**
  * Flyway {@code baseline-on-migrate} 的行为测试（里程碑 I8）。

@@ -1,8 +1,8 @@
 package com.mqspg.config.registry;
 
-import com.mqspg.common.model.RouteConfig;
-
 import java.util.List;
+
+import com.mqspg.common.model.RouteConfig;
 
 /**
  * 配置版本注册表（tech-design §12.4）。

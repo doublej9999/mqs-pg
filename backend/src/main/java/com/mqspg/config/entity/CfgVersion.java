@@ -1,14 +1,15 @@
 package com.mqspg.config.entity;
 
+import java.time.OffsetDateTime;
+
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mqspg.common.persistence.JsonbTypeHandler;
-import lombok.Data;
 
-import java.time.OffsetDateTime;
+import lombok.Data;
 
 /**
  * 路由配置版本（cfg_version）。

@@ -1,9 +1,9 @@
 package com.mqspg.mqs;
 
-import com.mqspg.mqs.spi.MqsMessage;
-
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+
+import com.mqspg.mqs.spi.MqsMessage;
 
 /** 测试用消息实现。 */
 public class FakeMessage implements MqsMessage {

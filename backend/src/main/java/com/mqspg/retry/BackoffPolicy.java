@@ -1,10 +1,11 @@
 package com.mqspg.retry;
 
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
+
+import org.springframework.stereotype.Component;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * 指数退避 + 抖动（PRD §26）。

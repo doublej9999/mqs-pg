@@ -1,25 +1,25 @@
 package com.mqspg.metrics;
 
-import com.mqspg.consumer.PgHealthGate;
-import com.mqspg.raw.RawStore;
-import com.mqspg.retry.RetryService;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.health.contributor.Health;
-import org.springframework.boot.health.contributor.Status;
-
-import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.Status;
+
+import com.mqspg.consumer.PgHealthGate;
+import com.mqspg.raw.RawStore;
+import com.mqspg.retry.RetryService;
 
 /**
  * 健康指示器测试（里程碑 H2）。

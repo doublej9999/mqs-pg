@@ -1,14 +1,16 @@
 package com.mqspg.consumer;
 
-import lombok.extern.slf4j.Slf4j;
-import com.mqspg.metrics.MqsMetrics;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import com.mqspg.metrics.MqsMetrics;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * PG 健康闸门（tech-design §6.2，PRD §24 / §50）。

@@ -1,9 +1,9 @@
 package com.mqspg.common.logging;
 
-import org.slf4j.MDC;
-
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import org.slf4j.MDC;
 
 /**
  * MDC 关联字段作用域（里程碑 B3）。

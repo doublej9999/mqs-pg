@@ -1,12 +1,12 @@
 package com.mqspg.config.dto;
 
+import java.util.List;
+import java.util.Map;
+
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.common.persistence.JsonbTypeHandler;
-
-import java.util.List;
-import java.util.Map;
 
 /**
  * 目标数据源连接池参数（Hikari 语义）。

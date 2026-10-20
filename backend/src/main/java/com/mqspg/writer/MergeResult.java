@@ -1,12 +1,12 @@
 package com.mqspg.writer;
 
-import com.mqspg.common.model.KeyTuple;
-import com.mqspg.common.model.MergeAction;
-
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+
+import com.mqspg.common.model.KeyTuple;
+import com.mqspg.common.model.MergeAction;
 
 /**
  * 一次批次写入的结果。

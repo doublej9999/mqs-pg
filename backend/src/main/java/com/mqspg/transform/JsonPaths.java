@@ -1,5 +1,10 @@
 package com.mqspg.transform;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
@@ -10,11 +15,8 @@ import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.common.persistence.JsonbTypeHandler;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * JSONPath 求值，带编译缓存。

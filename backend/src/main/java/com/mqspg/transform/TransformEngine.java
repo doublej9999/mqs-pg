@@ -1,5 +1,10 @@
 package com.mqspg.transform;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mqspg.common.error.ErrorCode;
@@ -10,12 +15,9 @@ import com.mqspg.common.model.TargetRow;
 import com.mqspg.common.persistence.JsonbTypeHandler;
 import com.schibsted.spt.data.jslt.Expression;
 import com.schibsted.spt.data.jslt.Parser;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * 消息体 → 目标行的转换（tech-design §8）。

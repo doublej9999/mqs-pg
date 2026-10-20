@@ -1,12 +1,13 @@
 package com.mqspg.retry.entity;
 
+import java.time.OffsetDateTime;
+
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.Data;
 
-import java.time.OffsetDateTime;
+import lombok.Data;
 
 /** 错误记录（rt_error_record）；{@code isFinal = true} 表示 DLQ 终态（PRD §31）。 */
 @Data

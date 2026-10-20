@@ -1,10 +1,11 @@
 package com.mqspg.raw;
 
-import lombok.Data;
+import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
+import lombok.Data;
 
 /** 原始消息留存参数（tech-design §11，PRD §29 / §32 / §33）。 */
 @Data

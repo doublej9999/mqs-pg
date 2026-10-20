@@ -1,12 +1,14 @@
 package com.mqspg.config.registry;
 
-import com.mqspg.config.event.DatasourceChangedEvent;
-import com.mqspg.writer.datasource.TargetDataSourceRegistry;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+
+import com.mqspg.config.event.DatasourceChangedEvent;
+import com.mqspg.writer.datasource.TargetDataSourceRegistry;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 目标数据源配置变更后，在**事务提交之后**丢弃旧的连接池。

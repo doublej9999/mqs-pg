@@ -1,12 +1,14 @@
 package com.mqspg.retry;
 
-import com.mqspg.mqs.spi.FailureMeta;
-import com.mqspg.mqs.spi.MqsDeadLetterSink;
-import com.mqspg.mqs.spi.MqsMessage;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import com.mqspg.mqs.spi.FailureMeta;
+import com.mqspg.mqs.spi.MqsDeadLetterSink;
+import com.mqspg.mqs.spi.MqsMessage;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * V1 的 DLQ 落点。

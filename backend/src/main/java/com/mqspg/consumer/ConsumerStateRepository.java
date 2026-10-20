@@ -1,14 +1,16 @@
 package com.mqspg.consumer;
 
+import java.time.OffsetDateTime;
+
+import org.springframework.stereotype.Component;
+
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.config.entity.RtConsumerState;
 import com.mqspg.config.mapper.RtConsumerStateMapper;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.time.OffsetDateTime;
 
 /**
  * 消费状态的持久化与状态迁移（tech-design §6.1）。

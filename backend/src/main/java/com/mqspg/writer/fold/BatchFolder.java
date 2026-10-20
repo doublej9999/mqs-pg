@@ -1,14 +1,15 @@
 package com.mqspg.writer.fold;
 
-import com.mqspg.common.model.KeyTuple;
-import com.mqspg.common.model.TargetRow;
-import org.springframework.stereotype.Component;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.springframework.stereotype.Component;
+
+import com.mqspg.common.model.KeyTuple;
+import com.mqspg.common.model.TargetRow;
 
 /**
  * 批次内同 Upsert Key 保序折叠（tech-design §7.3 / ADR-05）。

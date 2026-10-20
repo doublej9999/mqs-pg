@@ -1,10 +1,5 @@
 package com.mqspg.config.registry;
 
-import com.mqspg.config.event.ConfigChangedEvent;
-import com.mqspg.consumer.ConsumerManager;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -12,6 +7,12 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.mqspg.config.event.ConfigChangedEvent;
+import com.mqspg.consumer.ConsumerManager;
 
 /**
  * AFTER_COMMIT 监听器的失败隔离测试（里程碑 H6）。

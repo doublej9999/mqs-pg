@@ -1,11 +1,12 @@
 package com.mqspg.retry.entity;
 
+import java.time.OffsetDateTime;
+
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.Data;
 
-import java.time.OffsetDateTime;
+import lombok.Data;
 
 /** 重试任务（rt_retry_task），应用侧重试的唯一持久载体（ADR-02）。 */
 @Data

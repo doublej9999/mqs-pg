@@ -1,9 +1,9 @@
 package com.mqspg.common.sql;
 
+import java.util.regex.Pattern;
+
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
-
-import java.util.regex.Pattern;
 
 /**
  * PG 标识符（schema / table / column）的白名单校验。

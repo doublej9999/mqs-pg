@@ -1,5 +1,12 @@
 package com.mqspg.writer.batch;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
+
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.common.logging.MdcScope;
@@ -18,14 +25,9 @@ import com.mqspg.writer.fold.BatchFolder;
 import com.mqspg.writer.fold.CandidateRecord;
 import com.mqspg.writer.fold.FoldedRecord;
 import com.mqspg.writer.fold.MessageRef;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * 批次处理器（tech-design §7）：把「一批消息」变成「逐条处置结论」。

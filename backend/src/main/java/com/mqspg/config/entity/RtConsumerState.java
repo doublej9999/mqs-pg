@@ -1,10 +1,11 @@
 package com.mqspg.config.entity;
 
+import java.time.OffsetDateTime;
+
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.Data;
 
-import java.time.OffsetDateTime;
+import lombok.Data;
 
 /** Consumer 运行状态（rt_consumer_state，tech-design §6.1）。 */
 @Data

@@ -1,10 +1,11 @@
 package com.mqspg.retry.mapper;
 
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.mqspg.retry.entity.RtRetryTask;
+import java.util.List;
+
 import org.apache.ibatis.annotations.Param;
 
-import java.util.List;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.mqspg.retry.entity.RtRetryTask;
 
 /** {@code rt_retry_task} 数据访问。自定义语句见 {@code mapper/RtRetryTaskMapper.xml}。 */
 public interface RtRetryTaskMapper extends BaseMapper<RtRetryTask> {

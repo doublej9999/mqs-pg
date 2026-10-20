@@ -1,5 +1,14 @@
 package com.mqspg.consumer;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.slf4j.MDC;
+import org.springframework.jdbc.core.JdbcTemplate;
+
 import com.mqspg.common.logging.MdcScope;
 import com.mqspg.common.model.RouteConfig;
 import com.mqspg.config.registry.ConfigRegistry;
@@ -11,15 +20,8 @@ import com.mqspg.writer.batch.BatchProperties;
 import com.mqspg.writer.batch.BatchResult;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.batch.MessageDisposition;
-import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
-import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 单个路由的消费循环（tech-design §6 / §7.1）。

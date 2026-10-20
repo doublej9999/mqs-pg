@@ -1,13 +1,14 @@
 package com.mqspg.mqs.mock;
 
-import com.mqspg.mqs.spi.ConsumerSpec;
-import com.mqspg.mqs.spi.MqsConsumer;
-import com.mqspg.mqs.spi.MqsMessage;
-import lombok.RequiredArgsConstructor;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.mqspg.mqs.spi.ConsumerSpec;
+import com.mqspg.mqs.spi.MqsConsumer;
+import com.mqspg.mqs.spi.MqsMessage;
+
+import lombok.RequiredArgsConstructor;
 
 /** 基于 {@link MockMqsBroker} 的消费者。 */
 @RequiredArgsConstructor

@@ -1,5 +1,15 @@
 package com.mqspg.config.service;
 
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
@@ -22,18 +32,9 @@ import com.mqspg.config.mapper.CfgVersionMapper;
 import com.mqspg.config.mapper.RtConsumerStateMapper;
 import com.mqspg.config.registry.ConfigRegistry;
 import com.mqspg.config.registry.RouteConfigAssembler;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * 配置域服务：查询、版本发布与激活（tech-design §12.3）。

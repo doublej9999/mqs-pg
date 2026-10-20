@@ -1,12 +1,12 @@
 package com.mqspg.writer.metadata;
 
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ProcessingException;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
 
 /**
  * 目标表的运行时元数据。

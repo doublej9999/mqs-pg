@@ -1,12 +1,14 @@
 package com.mqspg.config.registry;
 
-import com.mqspg.config.event.ConfigChangedEvent;
-import com.mqspg.consumer.ConsumerManager;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+
+import com.mqspg.config.event.ConfigChangedEvent;
+import com.mqspg.consumer.ConsumerManager;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 在配置变更事务**提交之后**刷新内存注册表并调整消费者。

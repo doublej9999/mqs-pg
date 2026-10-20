@@ -1,8 +1,8 @@
 package com.mqspg.writer.batch;
 
-import com.mqspg.mqs.spi.MqsMessage;
-
 import java.time.Instant;
+
+import com.mqspg.mqs.spi.MqsMessage;
 
 /**
  * 已进入批次缓冲的消息。

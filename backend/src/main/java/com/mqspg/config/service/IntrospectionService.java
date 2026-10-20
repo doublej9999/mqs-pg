@@ -1,5 +1,13 @@
 package com.mqspg.config.service;
 
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.SQLException;
+import java.util.List;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
 import com.mqspg.common.crypto.PasswordCodec;
 import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
@@ -11,15 +19,9 @@ import com.mqspg.config.mapper.CfgDatasourceMapper;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Service;
-
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.SQLException;
-import java.util.List;
 
 /**
  * 目标库结构探查：给页面的 schema / 表 / 列下拉框提供数据。

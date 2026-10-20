@@ -1,11 +1,12 @@
 package com.mqspg.config.entity;
 
+import java.time.OffsetDateTime;
+
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.Data;
 
-import java.time.OffsetDateTime;
+import lombok.Data;
 
 /** 同步路由：Topic + Tag → Target（cfg_route）。 */
 @Data

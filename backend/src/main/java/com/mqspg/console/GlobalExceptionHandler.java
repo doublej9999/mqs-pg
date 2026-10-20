@@ -1,22 +1,24 @@
 package com.mqspg.console;
 
-import com.mqspg.common.api.ApiResponse;
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ErrorSeverity;
-import com.mqspg.common.error.ProcessingException;
-import lombok.extern.slf4j.Slf4j;
+import java.util.UUID;
+
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import java.util.UUID;
+import com.mqspg.common.api.ApiResponse;
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ErrorSeverity;
+import com.mqspg.common.error.ProcessingException;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 统一异常到 {@link ApiResponse} 的映射。

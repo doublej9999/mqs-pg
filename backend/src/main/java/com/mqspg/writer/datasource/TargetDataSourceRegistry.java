@@ -1,5 +1,13 @@
 package com.mqspg.writer.datasource;
 
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mqspg.common.crypto.PasswordCodec;
 import com.mqspg.common.error.ErrorCode;
@@ -8,15 +16,9 @@ import com.mqspg.config.entity.CfgDatasource;
 import com.mqspg.config.mapper.CfgDatasourceMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
-import java.util.Iterator;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 多目标数据源连接池注册表（tech-design §9.5）。

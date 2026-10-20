@@ -1,5 +1,12 @@
 package com.mqspg.retry;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.common.model.KeyTuple;
@@ -16,14 +23,9 @@ import com.mqspg.writer.PgWriter;
 import com.mqspg.writer.fold.BatchFolder;
 import com.mqspg.writer.fold.CandidateRow;
 import com.mqspg.writer.fold.FoldedRecord;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * 重试重放：用**任务绑定的配置版本**重新走一遍转换与写入。

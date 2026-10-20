@@ -1,20 +1,22 @@
 package com.mqspg.metrics;
 
-import com.mqspg.consumer.PgHealthGate;
-import com.mqspg.raw.RawStore;
-import com.mqspg.retry.RetryService;
-import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import com.mqspg.consumer.PgHealthGate;
+import com.mqspg.raw.RawStore;
+import com.mqspg.retry.RetryService;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 业务健康指示器（里程碑 B2）。

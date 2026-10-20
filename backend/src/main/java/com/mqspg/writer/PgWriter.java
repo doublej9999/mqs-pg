@@ -1,5 +1,17 @@
 package com.mqspg.writer;
 
+import java.sql.SQLException;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import jakarta.annotation.PostConstruct;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+
 import com.mqspg.common.model.KeyTuple;
 import com.mqspg.common.model.MergeAction;
 import com.mqspg.common.model.RouteConfig;
@@ -10,19 +22,9 @@ import com.mqspg.writer.metadata.TargetMetadataReader;
 import com.mqspg.writer.metadata.TargetTableMeta;
 import com.mqspg.writer.sql.CompiledMerge;
 import com.mqspg.writer.sql.MergeSqlBuilder;
-import jakarta.annotation.PostConstruct;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Component;
-
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * PostgreSQL 批量写入器（tech-design §9）。

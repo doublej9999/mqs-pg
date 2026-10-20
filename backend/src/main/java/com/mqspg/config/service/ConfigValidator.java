@@ -1,5 +1,14 @@
 package com.mqspg.config.service;
 
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -19,16 +28,9 @@ import com.mqspg.transform.TransformEngine;
 import com.mqspg.writer.metadata.ColumnMeta;
 import com.mqspg.writer.metadata.TargetMetadataReader;
 import com.mqspg.writer.metadata.TargetTableMeta;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 
 /**
  * 配置发布前的静态校验（tech-design §12.5 的静态部分）。

@@ -1,30 +1,11 @@
 package com.mqspg.config;
 
-import com.mqspg.common.error.ErrorCode;
-import com.mqspg.common.error.ProcessingException;
-import com.mqspg.config.dto.ColumnDto;
-import com.mqspg.config.dto.DatasourceDto;
-import com.mqspg.config.dto.DatasourceRequest;
-import com.mqspg.config.dto.DraftDto;
-import com.mqspg.config.dto.DraftRequest;
-import com.mqspg.config.dto.VersionSummaryDto;
-import com.mqspg.config.dto.RouteRequest;
-import com.mqspg.config.dto.RouteSummaryDto;
-import com.mqspg.config.dto.TargetDto;
-import com.mqspg.config.dto.TargetRequest;
-import com.mqspg.config.dto.ValidationResultDto;
-import com.mqspg.config.service.ConfigAdminService;
-import com.mqspg.config.service.ConfigService;
-import com.mqspg.config.service.IntrospectionService;
-import com.mqspg.consumer.ConsumerManager;
-import com.mqspg.support.AbstractPgIntegrationTest;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.TestPropertySource;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -36,12 +17,32 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
+
+import com.mqspg.common.error.ErrorCode;
+import com.mqspg.common.error.ProcessingException;
+import com.mqspg.config.dto.ColumnDto;
+import com.mqspg.config.dto.DatasourceDto;
+import com.mqspg.config.dto.DatasourceRequest;
+import com.mqspg.config.dto.DraftDto;
+import com.mqspg.config.dto.DraftRequest;
+import com.mqspg.config.dto.RouteRequest;
+import com.mqspg.config.dto.RouteSummaryDto;
+import com.mqspg.config.dto.TargetDto;
+import com.mqspg.config.dto.TargetRequest;
+import com.mqspg.config.dto.ValidationResultDto;
+import com.mqspg.config.dto.VersionSummaryDto;
+import com.mqspg.config.service.ConfigAdminService;
+import com.mqspg.config.service.ConfigService;
+import com.mqspg.config.service.IntrospectionService;
+import com.mqspg.consumer.ConsumerManager;
+import com.mqspg.support.AbstractPgIntegrationTest;
 
 /**
  * 配置域写操作测试（阶段 9：页面配置化）。

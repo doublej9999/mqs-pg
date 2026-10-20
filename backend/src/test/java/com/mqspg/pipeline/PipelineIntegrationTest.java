@@ -1,5 +1,24 @@
 package com.mqspg.pipeline;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
+
 import com.mqspg.config.registry.ConfigRegistry;
 import com.mqspg.mqs.mock.MockMqsBroker;
 import com.mqspg.mqs.spi.ConsumerSpec;
@@ -12,24 +31,6 @@ import com.mqspg.writer.batch.BatchResult;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.batch.Disposition;
 import com.mqspg.writer.batch.MessageDisposition;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.TestPropertySource;
-
-import java.math.BigDecimal;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 端到端管线测试：投递 → 拉取 → 转换 → 折叠 → MERGE → ACK 判定。

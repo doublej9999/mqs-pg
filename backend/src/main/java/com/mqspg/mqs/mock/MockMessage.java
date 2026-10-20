@@ -1,10 +1,10 @@
 package com.mqspg.mqs.mock;
 
-import com.mqspg.mqs.spi.MqsMessage;
-
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import com.mqspg.mqs.spi.MqsMessage;
 
 /** 内存消息。{@code deliveryAttempt} 在每次重新投递时自增。 */
 public class MockMessage implements MqsMessage {

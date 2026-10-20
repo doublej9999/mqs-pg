@@ -1,9 +1,18 @@
 package com.mqspg.raw;
 
-import com.mqspg.mqs.FakeMessage;
-import com.mqspg.metrics.MqsMetrics;
-import com.mqspg.support.AbstractPgIntegrationTest;
-import com.mqspg.writer.batch.BufferedMessage;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,18 +21,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
-import java.time.Instant;
-import java.time.Duration;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.mqspg.metrics.MqsMetrics;
+import com.mqspg.mqs.FakeMessage;
+import com.mqspg.support.AbstractPgIntegrationTest;
+import com.mqspg.writer.batch.BufferedMessage;
 
 /**
  * 原始留存与分区维护测试（阶段 7）。
