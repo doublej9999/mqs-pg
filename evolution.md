@@ -1,7 +1,48 @@
 # 演进记录
 
 本文件按时间记录每一次优化的**背景 / 改动 / 验证 / 影响与回滚 / README 更新**。
-整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)（§5.1 为记录规范）。
+整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)（§11.1 为记录规范）。
+文件按 **倒序** 排列：最新的一条紧跟在分隔线之后，**新增条目插在顶部**，不是追加到文件末尾。
+
+---
+
+## 2026-10-20 · 第二轮优化方案（重写 docs/optimization-plan.md）
+
+- **背景**
+  - 第一轮方案（A–F）里的 A1、B1–B3、C1–C3、D1、D2 已交付（D3 见上一条）；
+    文档的任务明细只对「还没做的部分」仍有施工价值，继续在其上追加会越来越难读。
+  - 通读全仓后确认：剩余问题的主线不是性能，而是**并发写保护、重试任务生命周期、失败信息泄露**，
+    与第一轮「观测先行」的顺序正好相反。
+
+- **改动**
+  - 重写 `docs/optimization-plan.md`：§3 归档第一轮交付与遗留（明确「不再重做」），
+    §5 给出新的七个里程碑 —— G（正确性）/ H（可观测与自愈）/ I（校验前置）/ J（性能）/
+    K（前端）/ L（工程化）/ M（集成测试补充），每条含现状证据（文件:行）、方案、验收、风险与回滚。
+  - 新增 §0「结论先行」与「建议先做的三件事」：K1 前端字段契约、G1 激活并发、G3 重试断头路。
+  - 新增 §9 决策记录：安全评审里的三条 P0（全站无认证、`/api/datasources/test` 任意 jdbcUrl、
+    密码明文回落）按第一轮的排除范围**只记录不实施**，并给出若要做的最小方案，等确认后再排期。
+  - 新增 §6 六条不可触碰红线与 §10 验证清单（含「本机 Docker 未启动时跑不了集成测试」的说明），
+    §11 收纳原来散落在 §5.1/§5.2 的协作约定（`evolution.md` 记录规范、README 更新点、提交粒度）。
+  - `README.md`「当前进度」：把阶段 10 拆成「第一轮已完成 / 第二轮待排期」两行，
+    删除已过时的「集成测试容器化。当前测试直连本地 PostgreSQL」条目（D1 早已完成），
+    用例数改为按 `@Test` 实测的 52，并补上 D2 CI。
+  - `AGENTS.md`：开头的「no CI」改为「CI 跑 `mvn verify` + `pnpm build`，但仍无 lint/format/typecheck」，
+    `docs/optimization-plan.md` 的说明改为「第一轮 A–F 归档于 §3，第二轮 G–M 在 §5」。
+
+- **验证**
+  - 纯文档改动，未触碰代码与配置；`mvn -B --no-transfer-progress -DskipTests compile` 仍 BUILD SUCCESS。
+  - 用例数为实测计数：`Select-String '@Test'` 得 14+9+3+8+7+4+7 = 52（无 `@ParameterizedTest`、
+    无 `@Disabled`、无 `@Nested`）。其中 51 是 D1/D2 那次全量跑的数字，
+    第 52 个是 `b4e8495`（RawStore 停机排空）往 `RawRetentionTest` 里加的那条，
+    该提交只重跑了那一个类 —— 所以 README 里写成「52 个用例，最近一次全量记录见 D1/D2（当时 51 全绿）」，
+    既更正了数字，也没有声称本轮跑过全量。
+  - 本轮**未**执行 `mvn test` 与 `scripts/e2e-config-api.ps1`：本机 Docker Desktop 未运行，
+    Testcontainers 拉不起 `postgres:18`（见新方案 §8 第 5 条与 §10 的前置说明）——
+    因此 README 里改成「最近一次全绿记录见 D1/D2 条目」，没有声称本轮跑过。
+
+- **影响与回滚**
+  - 无运行时影响，不影响构建与测试。
+  - 回滚：`git checkout -- docs/optimization-plan.md`，并删除本节。
 
 ---
 

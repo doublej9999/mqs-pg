@@ -1,15 +1,15 @@
 # AGENTS.md
 
 **mqs-pg** — config-driven MQ → PostgreSQL sync (consume MQ events, transform by config,
-idempotent MERGE upsert). Two independent apps, no CI and no lint/format/typecheck tooling;
-don't invent commands for them.
+idempotent MERGE upsert). Two independent apps. CI runs `mvn verify` + `pnpm build`, but there is
+still no lint/format/typecheck tooling — don't invent commands for it.
 
 ## Read first
 - `README.md` — quickstart, mock-MQ walkthrough, and "八个已踩过的坑" (eight silent-failure pitfalls).
 - `tech-design.md` — ADRs, correctness proofs, measured results (appendices E/F). Read the relevant ADR before changing pipeline semantics.
 - `prd.md` — requirements.
-- `docs/optimization-plan.md` — the optimization roadmap (milestones A–F) and the `evolution.md` logging convention.
-- `evolution.md` — per-change log (background / changes / verification / rollback). Append an entry for every fix.
+- `docs/optimization-plan.md` — the optimization roadmap (round 1 milestones A–F archived in §3; round 2 milestones G–M in §5) and the `evolution.md` logging convention (§11).
+- `evolution.md` — per-change log (background / changes / verification / rollback), newest entry first. Add an entry for every fix.
 
 ## Layout
 - `backend/` — Spring Boot **4.1.1** / Java **21** / Maven. Root package `com.mqspg`: `config/` (config domain), `mqs/` (SPI + in-process mock), `transform/`, `writer/`, `consumer/`, `retry/`, `raw/`, `console/` (REST). Entry point `MqsPgApplication`.
@@ -31,7 +31,7 @@ Frontend (run from `frontend/`): `pnpm install`, `pnpm dev` (`:5173`), `pnpm bui
 ## Prerequisites (integration work)
 - PostgreSQL **17+** is required (`MERGE ... RETURNING merge_action()`); tested on 18.1. Local default: a docker container named `postgres`, `POSTGRES_PASSWORD=123456`, db `postgres`; override with `MQS_PG_DB_URL` / `MQS_PG_DB_USER` / `MQS_PG_DB_PASSWORD`. Schema `mqs_pg` and all tables are created by Flyway.
 - The backend integration tests (`PgWriterTest`, `PipelineIntegrationTest`, `RouteConsumerIntegrationTest`, `RetrySchedulerTest`, `RawRetentionTest`, `ConfigAdminTest`) run against a **Testcontainers** `postgres:18` container (see `AbstractPgIntegrationTest`): only Docker is needed — no pre-started PG and no manual seeding, since Flyway applies `db/migration` + dev `db/demo` on a fresh container. They set `consumer.auto-start=false` so the background consumer does not race the assertions.
-- `scripts/e2e-config-api.ps1` needs the backend running **and** a docker container literally named `postgres` — it shells out to `docker exec <name> psql` for setup/teardown.
+- `scripts/e2e-config-api.ps1` needs the backend running. Its SQL access is parameterized: default is `docker exec <DbContainer> psql` (container name defaults to `postgres`, override with `-DbContainer`); use `-SqlMode psql` with `-PgHost/-PgPort/-PgUser/-PgPassword/-PgDatabase` to connect directly instead. The datasource it creates via the API must be reachable **from the backend process**, so point `-TargetJdbcUrl/-TargetUser/-TargetPassword` at it (use the service name when the backend also runs in a container).
 - `mqs-pg.mqs.vendor=mock` (default) runs an in-process broker, so the full pipeline works without a real MQ platform.
 
 ## Silent-failure gotchas

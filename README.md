@@ -152,6 +152,16 @@ Flyway 会在空容器里建 schema（`db/migration` + dev 的 `db/demo`）并�
 pwsh -File scripts/e2e-config-api.ps1     # Windows PowerShell 5.1 亦可
 ```
 
+脚本的 SQL 访问默认是 `docker exec <容器名> psql`（容器名默认 `postgres`，用 `-DbContainer` 覆盖）；
+没有 docker CLI 时可用 `-SqlMode psql` 直连（配 `-PgHost/-PgPort/-PgUser/-PgPassword/-PgDatabase`）。
+脚本经 API 新建的数据源必须让**后端进程**连得上，由 `-TargetJdbcUrl/-TargetUser/-TargetPassword`
+指定（后端也跑在容器里时就填服务名）：
+
+```powershell
+pwsh -File scripts/e2e-config-api.ps1 -DbContainer pg-min
+pwsh -File scripts/e2e-config-api.ps1 -SqlMode psql -PgPassword 123456
+```
+
 这个脚本只用页面真正会调的接口，从「建数据源」一路走到「消息落库」，
 自带建表与清理，可反复运行。它覆盖的正是**配置化闭环**：
 新建数据源 → 试连 → 探查 schema/表/列 → 建目标表 → 建路由 → 存草稿 →
@@ -318,25 +328,31 @@ mqs-pg/
 | 7 Raw Message 分区留存 + TTL 维护 | ✅ |
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
-| 10 优化：A 稳定性 / B 可观测性 / C 性能 / D 交付 / E 工程化 / F 前端 | 🚧 进行中（A、B、C 已交付，D1 完成） |
+| 10 优化第一轮：A 稳定性 / B 可观测性 / C 性能 / D 交付 | ✅ A1、B1–B3、C1–C3、D1–D3 已交付 |
+| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | 📋 方案已出（`docs/optimization-plan.md` §5），待排期 |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
-当前 `mvn test`：**51 个用例全部通过**（其中 14 个是阶段 9 新增的配置域写操作测试），
-集成测试已迁移到 Testcontainers —— **本机不启 PostgreSQL、仅需 Docker 即可跑通**；
-`scripts/e2e-config-api.ps1` 端到端断言全部通过。
+当前测试总计 **52 个用例**（`@Test` 计数，无 `@ParameterizedTest` / `@Disabled`）：
+配置域 14、管线 9 + 3、重试 8、留存 7、写入 4、折叠 7。
+其中 6 个类（配置域、管线、消费、重试、留存、写入）跑在 **Testcontainers** 的 `postgres:18` 上 ——
+**本机不启 PostgreSQL、仅需 Docker 即可跑通**；`BatchFolderTest` 是纯内存测试。
+最近一次**全量** `mvn test` 的记录见 `evolution.md` 的 D1 / D2 条目（当时 51 个用例全绿）；
+之后的 RawStore 停机排空条目只重跑了 `RawRetentionTest`（7 个，含新增的排空用例），
+所以现在的 `@Test` 总数是 52。重跑方式见下方「测试」一节，需要先启动 Docker。
 
-优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)，
-每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
-当前进度：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志、
+优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)（第一轮 A–F 的交付情况归档在 §3，
+第二轮 G–M 的施工图在 §5），每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
+第一轮已实现：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志、
 C1 列表接口消除 N+1、C2 `nextVersionNumber` 聚合查询、C3 留存超大报文跳过解析、
-D1 集成测试迁移 Testcontainers**已实现（详见 evolution.md）。
+D1 集成测试迁移 Testcontainers、D2 CI、D3 e2e 脚本参数化**（详见 evolution.md）。
 
 ### 仍待接入的部分
 
 * **平台 MQS 实现**。`MqsConsumerFactory` SPI 已定稿，仓库内只有内存 mock
   （`MockMqsBroker`）。接入真实平台时新增一个实现类即可，消费循环、重试、留存均无需改动。
 * **控制台鉴权**。REST API 目前无认证，前端只保留了 token / 角色的结构位置。
-* **集成测试容器化**。当前测试直连本地 PostgreSQL，计划迁移到 Testcontainers。
+  这条与「`/api/datasources/test` 可对任意 `jdbcUrl` 试连」一起记在优化方案 §9 的决策记录里，
+  属于已知风险，等鉴权专题一起处理。
 * **发布前的试运行（Dry Run）**。目前发布只做静态校验（列覆盖、唯一索引、表达式可解析），
   不会真拿一条样本消息试写一次；`POST /routes/{id}/draft/preview` 的位置已经留好。
 * **Topic 仍是自由输入**。`MockMqsBroker` 无法枚举 Topic，平台 MQS 的枚举接口也还没接，
