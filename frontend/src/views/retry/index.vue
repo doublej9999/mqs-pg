@@ -114,6 +114,7 @@
 <script setup>
 import { computed, onActivated, ref } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { retryStatusTagType as tagType } from '@/constants/status'
 import { Search } from '@element-plus/icons-vue'
 import { cancelRetryTask, getRetryTask, listRetry, replayRetryTask, retrySummary } from '@/api/retry'
 import { confirmAction } from '@/utils/confirm'
@@ -140,20 +141,6 @@ const prettyPayload = computed(() => {
   }
 })
 
-function tagType(status) {
-  switch (status) {
-    case 'SUCCEEDED':
-      return 'success'
-    case 'RUNNING':
-      return 'primary'
-    case 'PENDING':
-      return 'warning'
-    case 'DLQ':
-      return 'danger'
-    default:
-      return 'info'
-  }
-}
 
 async function load() {
   loading.value = true

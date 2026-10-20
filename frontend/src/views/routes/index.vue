@@ -406,6 +406,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import {
+  consumerStateTagType as consumerTagType,
+  versionStatusTagType as versionTagType
+} from '@/constants/status'
 import { Coin, Plus, Refresh } from '@element-plus/icons-vue'
 import { confirmAction } from '@/utils/confirm'
 import {
@@ -537,19 +541,7 @@ async function loadDatasources() {
   datasources.value = (await listDatasources()) || []
 }
 
-function consumerTagType(status) {
-  if (status === 'RUNNING') return 'success'
-  if (status === 'PAUSED' || status === 'ERROR') return 'danger'
-  if (status === 'RECOVERING') return 'warning'
-  return 'info'
-}
 
-function versionTagType(status) {
-  if (status === 'ACTIVE') return 'success'
-  if (status === 'PUBLISHED') return 'primary'
-  if (status === 'DRAFT') return 'warning'
-  return 'info'
-}
 
 // ==================================================================
 // 结构探查（下拉框）
@@ -929,13 +921,7 @@ async function openMappings(row) {
       ElMessage.warning(`目标表列取不到，目标列需手工填写：${e?.message || '查询失败'}`)
     }
     const d = await getDraft(row.id)
-    draft.version = d.version
-    draft.status = d.status
-    draft.persisted = d.persisted
-    draft.changeNote = d.changeNote || ''
-    draft.mappingStrategy = d.mappingStrategy || 'EXACT'
-    draft.jslt = d.jslt ?? null
-    mappings.value = (d.content?.mappings || []).map(toEditorRow)
+    applyDraft(d)
     // 全部就绪再显示
     mappingVisible.value = true
   } catch (e) {
@@ -979,15 +965,32 @@ function addRow() {
   })
 }
 
-async function onAutoGenerate() {
-  const d = await autoGenerateMappings(current.value.id)
+/**
+ * 把后端返回的草稿水合成编辑器状态。
+ *
+ * <p>K5：这段赋值原先在 openMappings / onAutoGenerate / persistDraft 里
+ * 逐字重复了三遍。三处各自演化是必然的 —— 比如某次给 draft 加字段只改了其中两处，
+ * 表现就是「打开映射时看到旧值、自动生成后却正常」，极难定位。
+ * 收敛到一处后，加字段只需改这里。
+ *
+ * @param d    后端返回的草稿/版本对象
+ * @param opts.keepMappings 是否保留当前编辑器里的映射行（保存后回写时用）
+ */
+function applyDraft(d, { keepMappings = false } = {}) {
   draft.version = d.version
   draft.status = d.status
   draft.persisted = d.persisted
   draft.changeNote = d.changeNote || ''
   draft.mappingStrategy = d.mappingStrategy || 'EXACT'
   draft.jslt = d.jslt ?? null
-  mappings.value = (d.content?.mappings || []).map(toEditorRow)
+  if (!keepMappings) {
+    mappings.value = (d.content?.mappings || []).map(toEditorRow)
+  }
+}
+
+async function onAutoGenerate() {
+  const d = await autoGenerateMappings(current.value.id)
+  applyDraft(d)
   issues.value = []
   ElMessage.success(`已按目标表列生成 ${mappings.value.length} 条映射，检查后发布`)
 }
@@ -1009,6 +1012,11 @@ async function persistDraft() {
     },
     changeNote: draft.changeNote || '控制台编辑'
   })
+  // 注意：这里**刻意不用** applyDraft(keepMappings) ——
+  // 保存后的回写与「加载草稿」语义不同：映射行是我们刚提交的那份，
+  // 不能再用后端返回的内容覆盖回去（会丢掉用户刚编辑但尚未生效的行）；
+  // 而 jslt 在这条路径上也不做 `?? null` 兜底（后端回显的就是提交值）。
+  // 换句话说，这三处看似重复，但只有两处是同一件事，已抽成 applyDraft。
   draft.version = d.version
   draft.status = d.status
   draft.persisted = d.persisted

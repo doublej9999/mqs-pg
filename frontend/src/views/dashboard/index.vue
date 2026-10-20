@@ -99,6 +99,7 @@ import {
 } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getOverview, getPgHealth, listConsumerStates } from '@/api/overview'
+import { consumerStateTagType as stateTagType } from '@/constants/status'
 import { retrySummaryByState } from '@/api/retry'
 
 const loading = ref(false)
@@ -121,12 +122,6 @@ const pgHealth = computed(() => {
   return { type: 'info', label: '未知', detail: pgDetail.value || '尚未取得探测结果' }
 })
 
-function stateTagType(state) {
-  if (state === 'RUNNING') return 'success'
-  if (state === 'PAUSED' || state === 'RECOVERING') return 'warning'
-  if (state === 'ERROR') return 'danger'
-  return 'info'
-}
 
 /**
  * 把聚合健康视图压成一句话。
