@@ -14,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.UUID;
 
@@ -129,6 +130,27 @@ public class GlobalExceptionHandler {
         log.warn("数据库约束冲突 traceId={} 原因={}", traceId, e.getMostSpecificCause().getMessage());
         return ResponseEntity.badRequest().body(ApiResponse.fail("CONSTRAINT_VIOLATION",
                 "数据冲突，请刷新后重试", traceId));
+    }
+
+    /**
+     * 路径不存在。
+     *
+     * <p>Spring 6.1 起，未匹配到任何 handler 的请求不再抛 NoHandlerFoundException，
+     * 而是抛 NoResourceFoundException（静态资源查找失败）。它落到下面的
+     * {@code Exception} 兜底分支就会变成 **500 + INTERNAL_ERROR + error 级堆栈** ——
+     * 访问一个拼错的 URL 就能在日志里刷一条「服务内部错误」，既误导排查方向，
+     * 也让人以为后端坏了。这里显式映射成 404。
+     *
+     * <p>顺带的好处：springdoc 关闭后访问 /v3/api-docs 也会走到这条干净路径，
+     * 而不是返回 500。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException e) {
+        String traceId = newTraceId();
+        // DEBUG 而非 WARN：这是调用方拼错路径，不是服务端问题，没必要刷警告
+        log.debug("路径不存在 traceId={} path={}", traceId, e.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail("NOT_FOUND", "接口不存在：%s".formatted(e.getResourcePath()), traceId));
     }
 
     @ExceptionHandler(Exception.class)

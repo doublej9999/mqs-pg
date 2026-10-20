@@ -6,3 +6,11 @@ spring:
 logging:
   level:
     com.mqspg: DEBUG
+
+# 开发环境打开 Swagger UI（生产默认关闭，见 application.yml）。
+# 入口：http://localhost:8080/swagger-ui/index.html
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

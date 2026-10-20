@@ -148,3 +148,11 @@ mqs-pg:
     # 启动后为所有 ACTIVE 路由自动拉起消费线程。
     # 跑离线测试时置为 false，避免后台线程干扰断言。
     auto-start: true
+
+# 生产默认关闭 Swagger UI：它会把这个服务的完整接口清单暴露给任何能访问到 8080 的人。
+# 开发 / 测试环境在下面显式打开。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

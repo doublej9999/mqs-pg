@@ -127,6 +127,32 @@ class GlobalExceptionHandlerTest {
         assertTrue(msg.contains("traceId="));
     }
 
+    /**
+     * 访问不存在的路径必须是 404，而不是 500。
+     *
+     * <p>Spring 6.1 起未匹配的请求抛的是 {@code NoResourceFoundException}，
+     * 若没有专门分支就会落到 {@code Exception} 兜底 → 500 + INTERNAL_ERROR +
+     * error 级堆栈。表现是「拼错一个 URL 就往日志里刷一条服务内部错误」，
+     * 排查时会被引到完全错误的方向。
+     *
+     * <p>这条也顺带守住 springdoc 关闭后的行为：/v3/api-docs 应当干净地 404。
+     */
+    @Test
+    @DisplayName("路径不存在 → 404 NOT_FOUND，不是 500")
+    void unknownPathIs404() {
+        // Spring Framework 7 的构造器是 (HttpMethod, String path, String location)，
+        // 与 6.2 的 (HttpMethod, String) 不同 —— resourcePath 取的是第二个参数
+        var e = new org.springframework.web.servlet.resource.NoResourceFoundException(
+                org.springframework.http.HttpMethod.GET, "v3/api-docs", null);
+        ResponseEntity<ApiResponse<Void>> r = handler.handleNoResource(e);
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), r.getStatusCode().value());
+        assertEquals("NOT_FOUND", r.getBody().code());
+        // 不能退化成「服务内部错误」那种只能靠 traceId 排查的提示
+        assertFalse(r.getBody().message().contains("服务内部错误"));
+        assertTrue(r.getBody().message().contains("traceId="));
+    }
+
     private void assertStatus(HttpStatus expected, ErrorCode code) {
         ResponseEntity<ApiResponse<Void>> r =
                 handler.handleProcessing(new ProcessingException(code, "说明"));

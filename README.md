@@ -74,6 +74,11 @@ curl http://localhost:8080/api/routes
 curl http://localhost:8080/api/routes/1
 ```
 
+**接口文档（Swagger UI）**：`dev` profile 下打开
+<http://localhost:8080/swagger-ui/index.html>（OpenAPI JSON 在 `/v3/api-docs`）。
+默认（非 dev）**关闭** —— 它会把完整接口清单暴露给任何能访问 8080 的人，
+生产要开就显式设 `springdoc.api-docs.enabled=true` / `springdoc.swagger-ui.enabled=true`。
+
 ### 4. 端到端试跑（mock MQ）
 
 `mqs-pg.mqs.vendor=mock`（默认）时会启用进程内消息代理，因此**不必等平台 MQS**

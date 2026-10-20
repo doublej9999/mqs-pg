@@ -35,6 +35,26 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
+        <!--
+          OpenAPI / Swagger UI（L4）。
+
+          springdoc 2.8.6 的父 POM 面向 Spring Boot 3.4.x，本项目是 4.1.1 / Spring
+          Framework 7 —— 计划里因此标注为「条件性：没有兼容版本就跳过」。
+          实测结论：**可用**。在全新的 PG 上起服务后
+            GET /v3/api-docs          → 200，列出全部 33 个 /api 端点
+            GET /swagger-ui/index.html → 200
+          没有 NoSuchMethodError / NoClassDefFoundError（Spring 7 移除的
+          ResponseEntity#getStatus() 等 API 该类库并未使用）。
+
+          注意：这是「实测通过」，不是「官方支持」。升级 Boot 小版本后如果
+          Swagger UI 打不开，先怀疑这里，必要时用 <exclusions> 排除它带进来的
+          旧 Spring 构件（目前没有需要排除的）。
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.8.6</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
