@@ -62,7 +62,13 @@
         </el-table-column>
         <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openMappings(row)">配置</el-button>
+            <el-button
+              link
+              type="primary"
+              size="small"
+              :loading="mappingLoading"
+              @click="openMappings(row)"
+            >配置</el-button>
             <el-button link type="primary" size="small" @click="openVersions(row)">版本</el-button>
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="danger" size="small" @click="onDelete(row)">删除</el-button>
@@ -306,7 +312,7 @@
               style="width: 100%"
             >
               <el-option
-                v-for="c in columns"
+                v-for="c in mappingColumns"
                 :key="c.name"
                 :label="c.requiresValue ? `${c.name} *` : c.name"
                 :value="c.name"
@@ -488,6 +494,9 @@ const hasDraft = computed(() => versions.value.some((v) => v.status === 'DRAFT')
 
 // ---- 映射 ----
 const mappingVisible = ref(false)
+// K4：映射编辑器的列与路由表单的列**分开**存，否则两个对话框同开时互相覆盖
+const mappingColumns = ref([])
+const mappingLoading = ref(false)
 const savingMapping = ref(false)
 const publishing = ref(false)
 const mappings = ref([])
@@ -891,34 +900,59 @@ function toPayloadRow(r) {
   return m
 }
 
+/**
+ * 打开映射编辑器。
+ *
+ * <p>K4 的两处修正：
+ * <ol>
+ *   <li><b>先取数，成功后再显示。</b>原来一进来就 `mappingVisible = true`，
+ *       随后才 await（getRoute / getDraft 都在显示之后）。任一请求失败就留下
+ *       一个空对话框 —— 用户看到的是「映射是空的」，会以为配置丢了。</li>
+ *   <li><b>用独立的 mappingColumns。</b>原来与路由表单共用同一个 `columns` ref，
+ *       两个对话框可以同时打开，后写者覆盖前者 —— 映射编辑器里出现**另一张表的列**，
+ *       进而可能选出目标表上根本不存在的列。</li>
+ * </ol>
+ */
 async function openMappings(row) {
   current.value = row
   issues.value = []
-  mappingVisible.value = true
-  // 映射编辑器需要目标表列，先补齐
-  const detail = await getRoute(row.id)
-  const t = detail.target || {}
+  mappingLoading.value = true
   try {
-    await loadColumnsFor(t.datasourceId, t.schemaName, t.tableName)
-  } catch {
-    columns.value = []
+    const detail = await getRoute(row.id)
+    const t = detail.target || {}
+    // 列取不到不算致命（编辑器仍可手工填目标列名），但要提示，
+    // 否则下拉是空的、用户不知道是「没取到」还是「表没列」
+    mappingColumns.value = []
+    try {
+      await loadColumnsFor(t.datasourceId, t.schemaName, t.tableName)
+    } catch (e) {
+      ElMessage.warning(`目标表列取不到，目标列需手工填写：${e?.message || '查询失败'}`)
+    }
+    const d = await getDraft(row.id)
+    draft.version = d.version
+    draft.status = d.status
+    draft.persisted = d.persisted
+    draft.changeNote = d.changeNote || ''
+    draft.mappingStrategy = d.mappingStrategy || 'EXACT'
+    draft.jslt = d.jslt ?? null
+    mappings.value = (d.content?.mappings || []).map(toEditorRow)
+    // 全部就绪再显示
+    mappingVisible.value = true
+  } catch (e) {
+    // 请求层已提示过网络错误，这里补一句「没打开」的结论，
+    // 免得用户点了「映射」之后什么都没发生
+    ElMessage.error(`打开映射编辑器失败：${e?.message || '请稍后重试'}`)
+  } finally {
+    mappingLoading.value = false
   }
-  const d = await getDraft(row.id)
-  draft.version = d.version
-  draft.status = d.status
-  draft.persisted = d.persisted
-  draft.changeNote = d.changeNote || ''
-  draft.mappingStrategy = d.mappingStrategy || 'EXACT'
-  draft.jslt = d.jslt ?? null
-  mappings.value = (d.content?.mappings || []).map(toEditorRow)
 }
 
 async function loadColumnsFor(datasourceId, schemaName, tableName) {
   if (!datasourceId || !schemaName || !tableName) {
-    columns.value = []
+    mappingColumns.value = []
     return
   }
-  columns.value = (await listColumns(datasourceId, schemaName, tableName)) || []
+  mappingColumns.value = (await listColumns(datasourceId, schemaName, tableName)) || []
 }
 
 function resetMapping() {
