@@ -7,6 +7,60 @@
 ---
 
 #
+## 2026-10-20 · G5 / G6 / G7 运行状态行、连接池失效时机、注册表生命周期
+
+三条都属「内存与库不同步」这一类，症状都很隐蔽，合在一起记。
+
+- **G5 运行状态行改为 upsert，bind_version 跟得上实际生效版本**
+  - 背景：`ensureConsumerState` 是「`selectById` 判空 → `insert`」，
+    并发下两个请求都看到「不存在」然后各插一行，后者撞 `rt_consumer_state` 主键，
+    异常变成一句数据库原文。而且 `bind_version` 只在首次插入时写，
+    之后激活新版本永远不动 —— 字段名与内容长期不一致。
+  - 改动：`RtConsumerStateMapper#upsertBindVersion`
+    （`INSERT ... ON CONFLICT (route_id) DO UPDATE SET bind_version = EXCLUDED.bind_version`）；
+    `publishVersion` 不再调 `ensureConsumerState`（发布不改变运行态，只有 activate 决定跑哪一版）。
+    字段语义在 javadoc 里定死：**最近一次状态变更时所处的 active 版本**，
+    不是「消息绑定版本」。
+  - 验证：`ConfigAdminTest.activateUpdatesBindVersion` —— 激活 v1 后为 1，再激活 v2 后为 2。
+
+- **G6 数据源变更后等到提交再关闭旧连接池**
+  - 背景：`updateDatasource` / `deleteDatasource` 在**事务内**调
+    `dataSources.invalidate(id)`，而它直接 `ds.close()`。事务未提交就关池，
+    正在该池上跑 MERGE 的消费线程收到连接中断 —— 消息不丢，但会产生一批本可避免的
+    `PG_CONNECTION_ERROR` 与闸门抖动；若事务回滚，池已销毁而配置没变，还得等惰性重建。
+  - 改动：新增 `DatasourceChangedEvent` + `DatasourceRefreshListener`
+    （`AFTER_COMMIT` → `invalidate`）。刻意不复用 `ConfigChangedEvent`：
+    那个动的是「注册表 + 消费者」，这个动的是连接池。
+    `ConfigAdminService` 去掉不再使用的 `TargetDataSourceRegistry` 字段。
+  - 验证：`mvn test` 全绿；`ConfigAdminTest` 的数据源增改删用例行为不变
+    （失效时机变了，但对测试可见的结果没变）。
+
+- **G7 注册表校验路由状态，删除版本后驱逐内存快照**
+  - 背景：`DbConfigRegistry#loadActive` 不判 `route.status`。
+    `refreshAll` 过滤了 ACTIVE，但 `refresh(routeId)` 是事件驱动的 ——
+    路由刚被停用时注册表仍持有它的快照，`activeVersion()` 照样有值，
+    而消费者已被停掉：**注册表认为在跑、实际没在跑**。
+    另外 `snapshots` 只增不删（这是 PRD §19 要求的），但「版本已被删除」
+    与「版本还在、只是不常用」是两件事，前者留着会让重放时而有配置时而没有。
+  - 改动：`loadActive` 增加状态判断；新增 `ConfigRegistry#evict(routeId, version)`，
+    `deleteVersion` 提交后由 AFTER_COMMIT 监听器调用
+    （新增 `ConfigChangedEvent.Change.VERSION_DELETED`，带版本号 ——
+    这是 record 加字段而不是复用 `ROUTE_REMOVED` 的原因：
+    后者会停掉消费者，而删一个非生效版本不该动消费者）。
+  - 验证：新增 `ConfigRegistryTest` 两条。`deletingVersionEvictsSnapshot`
+    先断言「激活后快照确实在缓存里」再断言「删除后为 null」——
+    不先断言存在的话，测的是「本来就没有」。`deactivatedRouteDropsOutOfRegistry`
+    把路由置 INACTIVE 后 `refresh`，断言 `active()` 为 null 且不在 `activeRouteIds()` 里。
+  - `mvn test`：65 passed（62 + 3 条）。
+
+- **影响与回滚**
+  - 三条都只改内存/状态行的更新时机与条件，不触及 ACK 与 MERGE 写入链路，§6 红线不受影响。
+  - G7 的 `evict` 只删非生效版本的快照，生效版本的删除在 `deleteVersion` 里就被拦住了。
+  - 回滚：G5 恢复 `selectById` + `insert`；G6 把两处改回直接 `invalidate`；
+    G7 去掉状态判断与 `evict` 调用（可保留接口，未使用即无副作用）。
+
+---
+
 ## 2026-10-20 · V2 迁移：草稿唯一索引 + 四个状态 CHECK + 错误流水索引（G4 / I7 / J6）
 
 - **背景**
