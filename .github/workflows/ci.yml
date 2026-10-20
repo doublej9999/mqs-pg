@@ -67,3 +67,9 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # 体积守卫（L5）：K6 把首屏从 1218 KB 压到 642 KB，但没有东西阻止
+      # 下一次全量 import 又把它拉回去 —— 体积回归不会让任何测试变红，
+      # 只会安静地变慢。阈值见 scripts/check-bundle-size.js。
+      - name: Check bundle size
+        run: pnpm size

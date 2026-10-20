@@ -26,7 +26,7 @@ mvn test "-Dtest=PgWriterTest#method"   # one method
 ```
 - **PowerShell mangles `-Dkey=value` args** (Maven: `Unknown lifecycle phase '...'`). Use environment variables for the profile (`$env:SPRING_PROFILES_ACTIVE='dev'; mvn spring-boot:run`) and quote `-Dtest=...`.
 
-Frontend (run from `frontend/`): `pnpm install`, `pnpm dev` (`:5173`), `pnpm build`. Only these three scripts exist — no `pnpm test` / `pnpm lint`. pnpm 12 blocks dependency postinstall scripts; `pnpm-workspace.yaml` allowlists `esbuild` and `vue-demi` (needed for Vite to start).
+Frontend (run from `frontend/`): `pnpm install`, `pnpm dev` (`:5173`, `strictPort` — the port must be free), `pnpm build`, `pnpm size` (asserts `dist` bundle sizes; run after a build). Only these four scripts exist — no `pnpm test` / `pnpm lint`. pnpm 12 blocks dependency postinstall scripts; `pnpm-workspace.yaml` allowlists `esbuild` and `vue-demi` (needed for Vite to start).
 
 ## Prerequisites (integration work)
 - PostgreSQL **17+** is required (`MERGE ... RETURNING merge_action()`); tested on 18.1. Local default: a docker container named `postgres`, `POSTGRES_PASSWORD=123456`, db `postgres`; override with `MQS_PG_DB_URL` / `MQS_PG_DB_USER` / `MQS_PG_DB_PASSWORD`. Schema `mqs_pg` and all tables are created by Flyway.
