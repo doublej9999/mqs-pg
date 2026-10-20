@@ -103,11 +103,40 @@ public class ConfigService {
                 versions);
     }
 
+    /**
+     * 路由详情里的版本列表。
+     *
+     * <p><b>为什么这里要限量</b>：{@code cfg_version} 随每次发版线性增长，
+     * 而详情页每次刷新都会调这个接口。原实现是「全量查回 + 在 Java 里 sort」——
+     * 版本数到几百后，一次详情请求要传输并排序几百行（含 JSONB 快照）的整表结果。
+     * 现在排序下推到 SQL 并用 {@code LIMIT} 截断，传输量与排序成本都变成常数级。
+     *
+     * <p>索引：{@code cfg_version} 上有 {@code UNIQUE (route_id, version)}，
+     * 因此「按 route_id 过滤 + version 倒序 + LIMIT」可以走索引倒序扫描，
+     * 不必把整段版本历史读进内存再排。
+     *
+     * <p>要完整列表请用 {@link #listVersions(long, int)}。刻意**不**在这里
+     * 一并返回总数：详情页只需要「最近改过什么」，而多一次 count(*) 让每次刷新
+     * 都多一趟往返，换来的信息没人用。
+     */
     public List<VersionSummaryDto> listVersions(long routeId) {
+        return listVersions(routeId, RECENT_VERSIONS);
+    }
+
+    /**
+     * 版本列表，按版本号倒序，最多 {@code limit} 条。
+     *
+     * @param limit 上限；{@code <= 0} 表示不限（内部诊断用）
+     */
+    public List<VersionSummaryDto> listVersions(long routeId, int limit) {
         CfgRoute route = requireRoute(routeId);
-        List<CfgVersion> versions = versionMapper.selectList(Wrappers.<CfgVersion>lambdaQuery()
-                .eq(CfgVersion::getRouteId, routeId));
-        versions.sort(Comparator.comparing(CfgVersion::getVersion).reversed());
+        var query = Wrappers.<CfgVersion>lambdaQuery()
+                .eq(CfgVersion::getRouteId, routeId)
+                .orderByDesc(CfgVersion::getVersion);
+        if (limit > 0) {
+            query.last("LIMIT " + limit); // limit 是 int 且已判正，无注入面
+        }
+        List<CfgVersion> versions = versionMapper.selectList(query);
         List<VersionSummaryDto> out = new ArrayList<>(versions.size());
         for (CfgVersion v : versions) {
             out.add(new VersionSummaryDto(
@@ -117,6 +146,9 @@ public class ConfigService {
         }
         return out;
     }
+
+    /** 详情页展示的版本条数上限（对外可见：前端与测试都要知道这个契约）。 */
+    public static final int RECENT_VERSIONS = 50;
 
     /** 取某个版本的原始快照（供 Console 编辑/预览）。 */
     public CfgVersion getVersion(long routeId, int version) {

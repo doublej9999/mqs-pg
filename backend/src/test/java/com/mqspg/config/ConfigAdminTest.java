@@ -7,6 +7,7 @@ import com.mqspg.config.dto.DatasourceDto;
 import com.mqspg.config.dto.DatasourceRequest;
 import com.mqspg.config.dto.DraftDto;
 import com.mqspg.config.dto.DraftRequest;
+import com.mqspg.config.dto.VersionSummaryDto;
 import com.mqspg.config.dto.RouteRequest;
 import com.mqspg.config.dto.RouteSummaryDto;
 import com.mqspg.config.dto.TargetDto;
@@ -756,6 +757,60 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         admin.deleteRoute(route.id(), true);
         admin.deleteTarget(target.id());
         admin.deleteDatasource(ds.id());
+    }
+
+    // ==================================================================
+    // 版本列表限量（里程碑 J5）
+    // ==================================================================
+
+    @Test
+    @DisplayName("详情页的版本列表只取最近 50 个，且按版本号倒序")
+    void listVersionsIsBoundedAndOrdered() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-j5", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-j5", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-j5", TOPIC + "j5", TAG, target.id()));
+
+        // 先建立 v1 作为内容基线，后续版本都从生效版本复制
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+        configService.activate(route.id(), v1);
+
+        // 再攒 55 个版本。走 admin.createVersion 会撞「已有草稿」规则，
+        // 而这里要验的是查询侧的限量，不是创建规则 —— 直接用 SQL 插行，
+        // 把测试焦点留在 listVersions 上。
+        int extra = 55;
+        // 从当前最大版本号之后开始，避开任何已有版本
+        Integer maxVersion = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(version), 0) FROM mqs_pg.cfg_version WHERE route_id = ?",
+                Integer.class, route.id());
+        int base = (maxVersion == null ? 0 : maxVersion) + 1000;
+        // status 必须用 PUBLISHED：uk_version_draft 限制每个路由至多一个 DRAFT
+        for (int i = 0; i < extra; i++) {
+            jdbc.update("""
+                    INSERT INTO mqs_pg.cfg_version (route_id, version, content, status, change_note, created_by)
+                    VALUES (?, ?, '{"mappings":[]}'::jsonb, 'PUBLISHED', 'j5 造数', 'test')
+                    """, route.id(), base + i);
+        }
+
+        List<VersionSummaryDto> recent = configService.listVersions(route.id());
+        assertEquals(ConfigService.RECENT_VERSIONS, recent.size(),
+                "详情页只应返回最近 " + ConfigService.RECENT_VERSIONS + " 个版本");
+
+        // 倒序：第一条是最大版本号，且严格递减
+        assertTrue(recent.get(0).version() > recent.get(recent.size() - 1).version(),
+                "应按版本号倒序返回");
+        for (int i = 1; i < recent.size(); i++) {
+            assertTrue(recent.get(i - 1).version() > recent.get(i).version(),
+                    "版本号必须严格递减，第 " + i + " 项出现乱序");
+        }
+
+        // 不限量时能拿到全部：草稿删掉后总数不是固定值，直接对比两次查询
+        int total = configService.listVersions(route.id(), 0).size();
+        assertTrue(total > ConfigService.RECENT_VERSIONS,
+                () -> "为了验证限量，总版本数必须超过上限，实际 " + total);
+        assertTrue(total > recent.size(),
+                "不限量时应返回比详情页更多的版本");
     }
 
     // ==================================================================
