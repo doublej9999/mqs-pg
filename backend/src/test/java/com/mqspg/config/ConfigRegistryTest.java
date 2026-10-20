@@ -50,6 +50,9 @@ class ConfigRegistryTest extends AbstractPgIntegrationTest {
     private ConfigService configService;
     @Autowired
     private ConfigRegistry registry;
+    /** 对账是 {@code DbConfigRegistry} 的实现细节，不在接口上，所以这里按具体类型再注一份。 */
+    @Autowired
+    private com.mqspg.config.registry.DbConfigRegistry dbRegistry;
     @Autowired
     private JdbcTemplate jdbc;
 
@@ -95,6 +98,28 @@ class ConfigRegistryTest extends AbstractPgIntegrationTest {
         assertEquals(0, registry.activeRouteIds().stream()
                 .filter(id -> id == route.id()).count(),
                 "已停用的路由不应出现在生效路由列表里");
+    }
+
+    @Test
+    @DisplayName("对账能把事件丢失造成的漂移拉回来")
+    void reconcileRepairsDrift() {
+        RouteSummaryDto route = createRouteWithTwoVersions();
+        int before = registry.activeVersion(route.id());
+
+        // 直接改库、不发事件 —— 模拟「AFTER_COMMIT 监听器处理失败」或事件丢失。
+        // 上一版之后，运行期没有任何周期性刷新，这种漂移会一直持续到重启。
+        Integer other = jdbc.queryForObject(
+                "SELECT min(version) FROM cfg_version WHERE route_id = ? AND version <> ?",
+                Integer.class, route.id(), before);
+        assertNotNull(other);
+        jdbc.update("UPDATE cfg_route SET active_version = ? WHERE id = ?", other, route.id());
+        assertEquals(before, registry.activeVersion(route.id()),
+                "不发事件时注册表本来就该是旧值，否则这个用例测不到东西");
+
+        dbRegistry.reconcile();
+
+        assertEquals(other, registry.activeVersion(route.id()),
+                "对账后注册表应跟上库里的 active_version");
     }
 
     // ------------------------------------------------------------------

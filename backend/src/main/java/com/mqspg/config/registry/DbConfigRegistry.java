@@ -13,10 +13,14 @@ import com.mqspg.config.mapper.CfgVersionMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -47,12 +51,98 @@ public class DbConfigRegistry implements ConfigRegistry {
     private final Map<Long, AtomicReference<RouteConfig>> active = new ConcurrentHashMap<>();
     private final Map<VersionKey, RouteConfig> snapshots = new ConcurrentHashMap<>();
 
+    /** 关掉周期性对账（单测与「配置由外部编排保证」的部署会需要）。 */
+    @Value("${mqs-pg.registry.reconcile-enabled:true}")
+    private boolean reconcileEnabled;
+
     private record VersionKey(long routeId, int version) {
     }
 
     @PostConstruct
     public void init() {
         refreshAll();
+    }
+
+    /**
+     * 周期性对账：把内存注册表拉回与数据库一致。
+     *
+     * <p><b>为什么需要它</b>：{@link ConfigRefreshListener} 的 catch 里写着
+     * 「下一次 refreshAll 会纠正」，但运行期**没有任何周期性刷新** ——
+     * {@code refreshAll} 只在 {@code @PostConstruct} 和 {@code ApplicationReadyEvent} 调过。
+     * 于是一次 DB 抖动、或目标表被删导致 AFTER_COMMIT 处理失败之后，
+     * 内存注册表与本进程消费者会一直停在旧状态，直到重启。
+     * 注释承诺的兜底并不存在，这属于典型的「注释撒谎」。
+     *
+     * <p><b>为什么是轻量对账而不是 refreshAll</b>：`refreshAll` 对每条 ACTIVE 路由都要
+     * 再读 version 与 target。这里只跑一条
+     * {@code SELECT id, active_version FROM cfg_route WHERE status='ACTIVE'}，
+     * 逐条比较内存里的版本号，**只在不一致时才** {@code refresh}。
+     * 稳定运行时这条查询每秒一次都无所谓。
+     *
+     * <p>间隔可配置（`mqs-pg.registry.refresh-interval`，默认 60s）。
+     * 关闭请用 `mqs-pg.registry.reconcile-enabled=false` 而不是把间隔设为 0 ——
+     * Spring 的 `fixedDelay` 要求正数，设 0 会在启动阶段就抛异常，
+     * 而不是「安静地不跑」。
+     *
+     * <p>注意开关只作用于**调度入口**（{@link #scheduledReconcile()}）：
+     * {@code reconcile()} 本身永远可手动调用，否则测试里想主动触发对账
+     * 也会被这个开关挡掉，测出来的是「开关生效」而不是「对账有效」。
+     */
+    @Scheduled(fixedDelayString = "${mqs-pg.registry.refresh-interval:60s}")
+    public void scheduledReconcile() {
+        if (!reconcileEnabled) {
+            return;
+        }
+        reconcile();
+    }
+
+    /** 对账本体。手动调用不受 {@code reconcile-enabled} 影响。 */
+    public void reconcile() {
+        List<CfgRoute> rows;
+        try {
+            rows = routeMapper.selectList(Wrappers.<CfgRoute>lambdaQuery()
+                    .select(CfgRoute::getId, CfgRoute::getActiveVersion)
+                    .eq(CfgRoute::getStatus, "ACTIVE"));
+        } catch (RuntimeException e) {
+            // 库暂时不可用时不要刷屏，也不要清空注册表 —— 保留旧快照比清空更安全
+            log.warn("注册表对账跳过（查询失败）: {}", e.getMessage());
+            return;
+        }
+
+        Set<Long> liveActive = new HashSet<>();
+        int fixed = 0;
+        for (CfgRoute row : rows) {
+            long id = row.getId();
+            Integer expected = row.getActiveVersion();
+            if (expected == null) {
+                continue;
+            }
+            liveActive.add(id);
+            int actual = activeVersion(id);
+            if (actual != expected) {
+                log.info("注册表对账: 路由 {} 内存版本 {} ≠ 库内 {}，正在刷新",
+                        id, actual, expected);
+                try {
+                    refresh(id);
+                    fixed++;
+                } catch (RuntimeException e) {
+                    log.warn("注册表对账刷新失败，留待下一轮: route={} 原因={}", id, e.getMessage());
+                }
+            }
+        }
+
+        // 库里已不再 ACTIVE、内存里还挂着的，一并摘掉（事件丢失时同样会走到这里）
+        for (Long id : List.copyOf(active.keySet())) {
+            if (!liveActive.contains(id)) {
+                active.remove(id);
+                log.info("注册表对账: 路由 {} 已不再生效，已从注册表移除", id);
+                fixed++;
+            }
+        }
+
+        if (fixed > 0) {
+            log.info("注册表对账: 修正 {} 条", fixed);
+        }
     }
 
     @Override

@@ -63,6 +63,9 @@ public abstract class AbstractPgIntegrationTest {
                 () -> BASE_JDBC_URL + "?currentSchema=mqs_pg,public");
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        // 注册表对账（H1）默认 60s 一次。测试里把它关掉：它在后台线程改内存注册表，
+        // 会与「手工改库再断言注册表状态」的用例竞态，让失败变得时有时无。
+        registry.add("mqs-pg.registry.reconcile-enabled", () -> "false");
     }
 
     @Autowired
