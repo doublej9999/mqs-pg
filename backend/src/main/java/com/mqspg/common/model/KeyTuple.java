@@ -1,6 +1,7 @@
 package com.mqspg.common.model;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -27,6 +28,20 @@ public record KeyTuple(List<Object> values) {
      */
     public static KeyTuple ofNormalized(List<Object> rawValues) {
         return new KeyTuple(rawValues.stream().map(KeyTuple::normalize).toList());
+    }
+
+    /**
+     * 定长数组版本：写入热路径每行调用一次，省掉中间 List 分配（J4）。
+     *
+     * <p>{@code Arrays.asList} 是零拷贝视图，交给 {@link #KeyTuple(List)} 的
+     * {@code List.copyOf} 正好一次拷贝 —— 不多不少。
+     */
+    public static KeyTuple ofNormalized(Object[] rawValues) {
+        Object[] normalized = new Object[rawValues.length];
+        for (int i = 0; i < rawValues.length; i++) {
+            normalized[i] = normalize(rawValues[i]);
+        }
+        return new KeyTuple(Arrays.asList(normalized));
     }
 
     private static Object normalize(Object v) {

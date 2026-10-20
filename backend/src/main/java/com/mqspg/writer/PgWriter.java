@@ -113,19 +113,27 @@ public class PgWriter {
         JdbcTemplate jdbc = dataSources.jdbc(cfg.target().datasourceId());
         CompiledMerge compiled = sqlBuilder.build(
                 cfg.target(), meta, cfg.upsertKeys(), cfg.updateTimeField(), chunk);
+        int keyCount = compiled.keyCount();
+        // 列标签只取决于 keyCount，块内算一次即可（J4）：
+        // 原实现每行都拼一次 "__key" + i，200 行 × 多列就是成百上千次字符串分配
+        String[] keyLabels = new String[keyCount];
+        for (int i = 0; i < keyCount; i++) {
+            keyLabels[i] = "__key" + i;
+        }
 
         Map<KeyTuple, MergeAction> got = jdbc.query(compiled.sql(), rs -> {
             Map<KeyTuple, MergeAction> out = new LinkedHashMap<>();
             while (rs.next()) {
-                List<Object> kv = new ArrayList<>(compiled.keyCount());
-                for (int i = 0; i < compiled.keyCount(); i++) {
-                    kv.add(rs.getObject("__key" + i));
+                // 定长数组 + ofNormalized 的重载：省掉每行一个 ArrayList
+                Object[] kv = new Object[keyCount];
+                for (int i = 0; i < keyCount; i++) {
+                    kv[i] = rs.getObject(keyLabels[i]);
                 }
                 // 规范化：JDBC 返回的类型可能与输入不同（输入 Integer、返回 Long）
                 out.put(KeyTuple.ofNormalized(kv), MergeAction.fromPgAction(rs.getString("__action")));
             }
             return out;
-        }, compiled.params().toArray());
+        }, compiled.paramsArray());
 
         if (got != null && !got.isEmpty()) {
             actions.putAll(got);
