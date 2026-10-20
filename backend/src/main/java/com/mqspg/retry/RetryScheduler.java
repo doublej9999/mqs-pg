@@ -2,16 +2,23 @@ package com.mqspg.retry;
 
 import com.mqspg.common.error.ErrorStage;
 import com.mqspg.common.logging.MdcScope;
+import com.mqspg.common.model.KeyTuple;
+import com.mqspg.common.model.MergeAction;
 import com.mqspg.mqs.spi.FailureMeta;
 import com.mqspg.mqs.spi.MqsDeadLetterSink;
 import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
+import com.mqspg.writer.MergeResult;
+import com.mqspg.writer.PgWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 重试调度器（tech-design §10，ADR-02）。
@@ -38,6 +45,7 @@ public class RetryScheduler {
     private final RetryReplayer replayer;
     private final RetryService retryService;
     private final MqsDeadLetterSink deadLetterSink;
+    private final PgWriter writer;
 
     @Scheduled(fixedDelayString = "${mqs-pg.retry.poll-interval:1s}")
     public void poll() {
@@ -78,26 +86,128 @@ public class RetryScheduler {
     }
 
     /**
-     * 逐条处理，并周期性续租。
+     * 按 {@code (routeId, configVersion)} 分组批量重放，并周期性续租。
      *
-     * <p>批量大小 200 + 初始租约 5 分钟的组合下，只要目标库慢一点，
-     * 后半段的任务就会在「租约已过期」的状态下被处理 —— 别的实例（或下一轮
-     * 自己的 {@code reclaimExpiredLeases}）已经把它们的副本领走了，
-     * 于是同一条消息被写两次。续租把这种情形收敛掉。
+     * <p><b>为什么要攒批</b>：逐条重放时每条任务都单独调
+     * {@code writer.write(cfg, List.of(oneRecord))} —— 同样的 MERGE 语句被拼
+     * 200 次、执行 200 次，PG 侧还要解析规划 200 次（pgjdbc 的
+     * PreparedStatement 缓存按 SQL 文本命中，逐条反而都是 hit，但往返仍是 200 次）。
+     * 攒批后同版本的任务合成一次 MERGE。
      *
-     * <p>续租失败（受影响行数与预期不符）说明有人已经抢走，**立即停止本轮**：
-     * 继续处理只会制造更多重复重放，剩下的任务留给下一轮。
+     * <p><b>为什么必须按版本分组</b>：折叠要用 {@code upsertKeys} 与
+     * {@code updateTimeField} 解释数据，两者都来自配置。混入不同版本，
+     * 等于用一套规则解释另一套规则下的数据。
+     *
+     * <p><b>为什么组间顺序执行而不是并发</b>：目标库连接池默认只有 4–10 条，
+     * 重试路径并发起来会和正常消费抢连接，把一次积压放大成全场抖动。
+     *
+     * <p><b>续租失败立即停止本轮</b>：说明有任务已被别人回收，
+     * 继续处理只会制造更多重复重放，剩下的留给下一轮。
      */
     private void processBatch(List<RtRetryTask> due, long leaseSeconds) {
         int renewEvery = Math.max(0, props.getRenewLeaseEvery());
-        for (int i = 0; i < due.size(); i++) {
-            if (renewEvery > 0 && i > 0 && i % renewEvery == 0
-                    && !renewLease(due.subList(i, due.size()), leaseSeconds)) {
+        List<List<RtRetryTask>> groups = groupByRouteAndVersion(due);
+        List<RtRetryTask> all = due;
+        int processed = 0;
+
+        for (List<RtRetryTask> group : groups) {
+            if (renewEvery > 0 && processed > 0 && processed % renewEvery < group.size()
+                    && !renewLease(all.subList(processed, all.size()), leaseSeconds)) {
                 log.warn("续租失败，提前结束本轮: 已处理 {}/{}，剩余任务留给下一轮",
-                        i, due.size());
+                        processed, all.size());
                 return;
             }
-            processOne(due.get(i));
+            processGroup(group);
+            processed += group.size();
+        }
+    }
+
+    /**
+     * 把本轮任务按 {@code (routeId, configVersion)} 分组，保持首次出现顺序。
+     *
+     * <p>用 record 作 key 而不是拼字符串：{@code routeId + ":" + version} 这种写法
+     * 一旦某天加进第三个维度，很容易忘了改两处而静默串组。
+     */
+    private static List<List<RtRetryTask>> groupByRouteAndVersion(List<RtRetryTask> due) {
+        Map<GroupKey, List<RtRetryTask>> byKey = new LinkedHashMap<>();
+        for (RtRetryTask t : due) {
+            byKey.computeIfAbsent(new GroupKey(t.getRouteId(), t.getConfigVersion()),
+                    k -> new ArrayList<>()).add(t);
+        }
+        return new ArrayList<>(byKey.values());
+    }
+
+    /** 分组键：同一路由、同一配置版本才允许折叠成一次写入。 */
+    private record GroupKey(Long routeId, Integer configVersion) {
+    }
+
+    /**
+     * 处理一组同版本任务：转换 + 折叠 + **一次** 写入，再把结果逐条回写。
+     *
+     * <p>关键约束：**每条任务的 attempt 账本必须各自独立推进**。
+     * 折叠只影响「写多少次」，不影响「每条消息失败了几次」——
+     * 折叠掉的只是同一 Upsert Key 的重复行，不是重试次数。
+     */
+    private void processGroup(List<RtRetryTask> group) {
+        Map<Long, ReplayOutcome> outcomes = new LinkedHashMap<>(group.size());
+        RetryReplayer.PreparedGroup prepared;
+        try {
+            prepared = replayer.prepareGroup(
+                    group.get(0).getRouteId(), group.get(0).getConfigVersion(), group, outcomes);
+        } catch (RuntimeException e) {
+            log.error("批量重放准备阶段异常，整组按 PG 级处理: 任务数={}", group.size(), e);
+            group.forEach(t -> outcomes.put(t.getId(), ReplayOutcome.pgFailure(e)));
+            applyOutcomes(group, outcomes);
+            return;
+        }
+
+        if (!prepared.isEmpty()) {
+            MergeResult merge;
+            try {
+                merge = writer.write(prepared.cfg(), prepared.folded());
+            } catch (RuntimeException e) {
+                merge = MergeResult.aborted(e, Map.of(), Map.of());
+            }
+
+            for (RtRetryTask task : group) {
+                if (outcomes.containsKey(task.getId())) {
+                    continue; // 转换就失败了，已经定案
+                }
+                KeyTuple key = prepared.keyOfTask().get(task.getId());
+                if (key == null) {
+                    continue;
+                }
+                outcomes.put(task.getId(), outcomeOf(merge, key));
+            }
+        }
+
+        applyOutcomes(group, outcomes);
+    }
+
+    /** 把写入结果翻译成单条任务的结论。 */
+    private static ReplayOutcome outcomeOf(MergeResult merge, KeyTuple key) {
+        if (merge.aborted()) {
+            // 整批中止：组内所有任务都不 ACK、不消耗次数，交给下一轮
+            return ReplayOutcome.pgFailure(merge.cause());
+        }
+        if (merge.hasFailure(key)) {
+            return ReplayOutcome.rowFailure("PG_CONSTRAINT_VIOLATION", merge.failureOf(key));
+        }
+        MergeAction action = merge.actionOf(key);
+        return ReplayOutcome.success(action == null ? MergeAction.SKIPPED_OLD_VERSION : action);
+    }
+
+    /** 逐条落状态。缺结果的（理论上不该有）按 PG 级处理，宁可多跑一轮也不丢消息。 */
+    private void applyOutcomes(List<RtRetryTask> group, Map<Long, ReplayOutcome> outcomes) {
+        for (RtRetryTask task : group) {
+            ReplayOutcome outcome = outcomes.get(task.getId());
+            if (outcome == null) {
+                outcome = ReplayOutcome.configMissing("批处理未产生结论，下一轮重试");
+            }
+            try (MdcScope ignored = MdcScope.open(
+                    String.valueOf(task.getRouteId()), task.getMessageId(), task.getConfigVersion())) {
+                applyOutcome(task, outcome);
+            }
         }
     }
 
@@ -138,6 +248,18 @@ public class RetryScheduler {
             outcome = ReplayOutcome.pgFailure(e);
         }
 
+        applyOutcome(task, outcome);
+    }
+
+    /**
+     * 按结论落状态。单条路径与批量路径**共用这一处**。
+     *
+     * <p>共用不是图省事：这套状态机里有四处容易写错的分叉（CONFIG_MISSING 与
+     * PG_FAILURE 不消耗次数、CONFIG_GONE 只缓冲有限轮、attempt 独立推进）。
+     * 两份拷贝一旦漂移，就会出现「单条重试进 DLQ、批量重试不进取」这种
+     * 只在积压时才暴露的不一致。
+     */
+    private void applyOutcome(RtRetryTask task, ReplayOutcome outcome) {
         switch (outcome.kind()) {
             case SUCCESS -> retryService.markSucceeded(task, String.valueOf(outcome.action()));
 

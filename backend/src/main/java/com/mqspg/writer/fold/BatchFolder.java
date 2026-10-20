@@ -66,6 +66,40 @@ public class BatchFolder {
         return new ArrayList<>(acc.values());
     }
 
+    /**
+     * 与 {@link #fold} 同一套规则，但候选只有目标行、没有来源消息。
+     *
+     * <p>供重试路径使用：那里消息早已 ACK，不该构造 {@link CandidateRecord}，
+     * 也不该让 {@code FoldedRecord.sources()} 非空（重放路径依赖它为空）。
+     *
+     * <p>折叠规则与 {@link #fold} **完全一致**（同键取 update_time 最大者，
+     * 相同时取最后出现者）。之所以不复制一份比较逻辑，是因为两处一旦漂移，
+     * 同一条消息走实时路径和重试路径会得到不同的胜出者 —— 那是最难查的一类不一致。
+     *
+     * @param candidates      待折叠的行，**顺序必须等于原始处理顺序**
+     * @param upsertKeys      Upsert Key 列名
+     * @param updateTimeField 单调守卫字段名
+     * @return 每个 Upsert Key 一条最终行（sources 恒为空）
+     */
+    public List<FoldedRecord> foldRows(List<CandidateRow> candidates,
+                                       List<String> upsertKeys,
+                                       String updateTimeField) {
+        Map<KeyTuple, FoldedRecord> acc = new LinkedHashMap<>(Math.max(16, candidates.size()));
+        for (CandidateRow c : candidates) {
+            KeyTuple key = KeyTuple.ofNormalized(c.row().keyValues(upsertKeys));
+            FoldedRecord prev = acc.get(key);
+            if (prev == null) {
+                acc.put(key, new FoldedRecord(key, c.row(), List.of()));
+                continue;
+            }
+            if (compareUpdateTime(c.row(), prev.winnerRow(), updateTimeField) >= 0) {
+                acc.put(key, new FoldedRecord(key, c.row(), List.of()));
+            }
+            // 更旧的记录：保留 winner，也不需要追加来源（没有来源可追加）
+        }
+        return new ArrayList<>(acc.values());
+    }
+
     /** null 视为最小。 */
     static int compareUpdateTime(TargetRow a, TargetRow b, String field) {
         Instant ta = a.getInstant(field);

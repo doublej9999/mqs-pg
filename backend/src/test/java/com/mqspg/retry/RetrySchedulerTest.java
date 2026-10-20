@@ -266,9 +266,83 @@ class RetrySchedulerTest extends AbstractPgIntegrationTest {
                 "租约应被推到约 10 分钟后，实际 " + lease);
     }
 
+    /**
+     * J1：同版本的多条任务（含同一 Upsert Key 的重复行）走批量路径时，
+     * 折叠成**一次**写入，且每条任务的 attempt 账本彼此独立。
+     *
+     * <p>用 {@code poll()} 而不是直接调私有方法，是为了让用例走真实路径：
+     * 领取 → 分组 → 折叠 → 一次 write → 逐条回写。
+     */
+    @Test
+    @DisplayName("批量重放：同版本任务折叠成一次写入，attempt 各自独立")
+    void batchReplayFoldsWithinSameVersion() {
+        long id = 980070L;
+        // 三条任务指向同一个 Upsert Key，update_time 递增：最新那条应胜出
+        RtRetryTask older = pending("rtt-b1", payload(id, "older", "1.00", "PAID",
+                "2026-05-01T10:00:00+08:00"), 2, 10);
+        RtRetryTask newest = pending("rtt-b2", payload(id, "newest", "2.00", "PAID",
+                "2026-05-01T12:00:00+08:00"), 0, 10);
+        // 另起一个 Key，验证组内是多行不是单行
+        RtRetryTask other = pending("rtt-b3", payload(id + 1, "other", "3.00", "PAID",
+                "2026-05-01T11:00:00+08:00"), 1, 10);
+
+        scheduler.poll();
+
+        // 折叠生效：更新的记录胜出
+        assertEquals("newest", nameOf(id));
+        assertEquals(0, new BigDecimal("2.00").compareTo(amountOf(id)));
+        assertEquals("other", nameOf(id + 1));
+
+        // 三条都成功（折叠不等于丢弃：更旧的那条也应有明确终态）
+        for (RtRetryTask t : List.of(older, newest, other)) {
+            RtRetryTask after = retryTaskMapper.selectById(t.getId());
+            assertEquals("SUCCEEDED", after.getStatus(),
+                    () -> "任务 " + t.getMessageId() + " 应为 SUCCEEDED，实际 " + after.getStatus());
+            // attempt 不被批量路径重置：账本是逐条的
+            assertEquals(t.getAttempt(), after.getAttempt(),
+                    () -> "任务 " + t.getMessageId() + " 的 attempt 不该被改动");
+        }
+    }
+
+    /**
+     * J1：组内一条任务转换失败，不应拖累同组其它任务。
+     *
+     * <p>失败那条拿到自己的 DATA_ERROR 并消耗次数，其余照常写入并成功。
+     */
+    @Test
+    @DisplayName("批量重放：组内单条数据错误只影响它自己")
+    void batchReplayIsolatesDataErrorWithinGroup() {
+        long okId = 980072L;
+        RtRetryTask good = pending("rtt-c1", payload(okId, "good", "5.00", "PAID",
+                "2026-05-02T10:00:00+08:00"), 0, 10);
+        // 金额溢出 NUMERIC(18,2)：transform 阶段就会失败
+        RtRetryTask bad = pending("rtt-c2", payload(okId + 1, "bad", "99999999999999999999", "PAID",
+                "2026-05-02T10:00:00+08:00"), 0, 10);
+
+        scheduler.poll();
+
+        assertEquals("SUCCEEDED", retryTaskMapper.selectById(good.getId()).getStatus());
+        assertEquals("good", nameOf(okId));
+
+        RtRetryTask badAfter = retryTaskMapper.selectById(bad.getId());
+        assertEquals("PENDING", badAfter.getStatus(), "数据错误应重新排队（未耗尽次数）");
+        assertEquals(1, badAfter.getAttempt(), "数据错误应消耗一次机会");
+        assertNull(nameOf(okId + 1), "坏数据不该落库");
+    }
+
     // ------------------------------------------------------------------
     // 辅助
     // ------------------------------------------------------------------
+
+    /** 造一条「已到期、可被 poll() 领取」的 PENDING 任务。 */
+    private RtRetryTask pending(String messageId, String body, int attempt, int maxAttempt) {
+        RtRetryTask t = insert(messageId, body, attempt, maxAttempt, 1);
+        t.setStatus("PENDING");
+        t.setLeaseUntil(null);
+        t.setNextRetryAt(OffsetDateTime.now().minusSeconds(5));
+        retryTaskMapper.updateById(t);
+        return t;
+    }
 
     /** 直接用 Mapper 造一条「已被领取」的重试任务。 */
     private RtRetryTask insert(String messageId, String body, int attempt, int maxAttempt, int version) {
