@@ -10,6 +10,7 @@ import com.mqspg.writer.metadata.TargetMetadataReader;
 import com.mqspg.writer.metadata.TargetTableMeta;
 import com.mqspg.writer.sql.CompiledMerge;
 import com.mqspg.writer.sql.MergeSqlBuilder;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,6 +55,15 @@ public class PgWriter {
 
     @Value("${mqs-pg.batch.write-chunk-size:200}")
     private int writeChunkSize = 200;
+
+    @PostConstruct
+    void registerGauges() {
+        // J3：SQL 文本缓存命中率。稳态下应长期停止增长 ——
+        // 若它随时间单调上升，说明 SQL 文本在变（表结构被改 / 列顺序抖动），
+        // 每变一次 PG 侧就要重新解析规划，那是性能问题而不是缓存问题。
+        metrics.gauge("mqspg.write.sql.cache.size", sqlBuilder,
+                (MergeSqlBuilder b) -> b.cacheSize());
+    }
 
     public MergeResult write(RouteConfig cfg, List<FoldedRecord> folded) {
         Map<KeyTuple, MergeAction> actions = new LinkedHashMap<>();

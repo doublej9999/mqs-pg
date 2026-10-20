@@ -9,6 +9,7 @@ import com.mqspg.mqs.FakeMessage;
 import com.mqspg.support.AbstractPgIntegrationTest;
 import com.mqspg.writer.batch.BufferedMessage;
 import com.mqspg.writer.datasource.TargetDataSourceRegistry;
+import com.mqspg.writer.sql.MergeSqlBuilder;
 import com.mqspg.writer.fold.BatchFolder;
 import com.mqspg.writer.fold.CandidateRecord;
 import com.mqspg.writer.fold.FoldedRecord;
@@ -64,6 +65,9 @@ class PgWriterTest extends AbstractPgIntegrationTest {
 
     @Autowired
     private BatchFolder folder;
+
+    @Autowired
+    private MergeSqlBuilder sqlBuilder;
 
     @Autowired
     private TargetDataSourceRegistry dataSources;
@@ -123,6 +127,30 @@ class PgWriterTest extends AbstractPgIntegrationTest {
         assertThat(nameOf(TEST_ID_1)).isEqualTo("b");
         // 三条来源都要能被 ACK
         assertThat(folded.get(0).sources()).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("J3：行数相同就复用同一份 SQL 文本，重复写入不让缓存增长")
+    void sqlTextIsReusedForSameRowCount() {
+        RouteConfig cfg = activeConfig();
+
+        // 先跑一次，把该表「两行」与「一行」两种文本都放进缓存
+        writer.write(cfg, fold(rec(TEST_ID_1, T1, "a"), rec(TEST_ID_2, T1, "b")));
+        writer.write(cfg, fold(rec(TEST_ID_3, T1, "c")));
+        int baseline = sqlBuilder.cacheSize();
+        assertThat(baseline).as("至少应缓存两行与一行两种文本").isGreaterThanOrEqualTo(2);
+
+        // 换行数再写几次：文本应完全复用，缓存条目数不增
+        writer.write(cfg, fold(rec(TEST_ID_1, T2, "a2"), rec(TEST_ID_2, T2, "b2")));
+        writer.write(cfg, fold(rec(TEST_ID_3, T2, "c2")));
+        assertThat(sqlBuilder.cacheSize())
+                .as("行数相同的批次必须复用同一份 SQL 文本")
+                .isEqualTo(baseline);
+
+        // 缓存只影响文本复用，不影响参数绑定：结果仍按各自的行写入
+        assertThat(nameOf(TEST_ID_1)).isEqualTo("a2");
+        assertThat(nameOf(TEST_ID_2)).isEqualTo("b2");
+        assertThat(nameOf(TEST_ID_3)).isEqualTo("c2");
     }
 
     @Test

@@ -9,6 +9,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 生成 {@code MERGE ... RETURNING merge_action()}（ADR-04）。
@@ -21,6 +23,42 @@ import java.util.List;
  */
 @Component
 public class MergeSqlBuilder {
+
+    /**
+     * SQL 文本缓存（J3）。
+     *
+     * <p>MERGE 文本由「表 + 列 + Upsert Key + 守卫字段 + 行数」唯一决定，
+     * 而行数通常只有 {@code write-chunk-size}（200）与尾块两三种 ——
+     * 也就是说同一个文本被拼了成千上万遍，PG 侧还要为每个新文本重新解析规划
+     * （pgjdbc 的 PreparedStatement 缓存按 SQL 文本命中）。这是写入热路径上
+     * 最大的一处无效开销。
+     *
+     * <p>key 用 record 而不是拼接字符串：影响文本的要素少一个就会产生**错误的 SQL**，
+     * 而错误 SQL 的症状（列不存在、类型不匹配）离根因很远。用 record 保证
+     * 少加一个字段时是编译期/equals 层面的显式行为，而不是字符串里悄悄少拼一段。
+     *
+     * <p>容量有上限：表结构变更（加列、改类型）会产生新 key，无上限就是内存泄漏。
+     * 满了直接清空而不是做 LRU —— 命中率才是目的，而「几种行数 × 几张表」
+     * 远小于上限，清空的代价可以忽略，换来的是不必为线程安全写更复杂的结构。
+     */
+    private final Map<SqlKey, String> sqlCache = new ConcurrentHashMap<>();
+
+    /** 缓存条目上限，超过即整体清空。 */
+    private static final int MAX_CACHE_SIZE = 256;
+
+    /** 缓存 key：**全部**影响 SQL 文本的要素。 */
+    record SqlKey(String qualifiedTable,
+                  List<String> columns,
+                  List<String> upsertKeys,
+                  String updateTimeField,
+                  int rowCount,
+                  String columnTypes) {
+    }
+
+    /** 当前缓存的 SQL 文本条数，供 gauge {@code mqspg.write.sql.cache.size} 使用。 */
+    public int cacheSize() {
+        return sqlCache.size();
+    }
 
     public CompiledMerge build(TargetRef target,
                                TargetTableMeta meta,
@@ -47,6 +85,7 @@ public class MergeSqlBuilder {
         }
 
         TargetRow sample = chunk.get(0).winnerRow();
+        // 列清单只在块首取一次（J3 附带项）：之前每行都调 asMap() 拷一份列名集合
         List<String> columns = new ArrayList<>(sample.asMap().keySet());
         if (columns.isEmpty()) {
             throw new IllegalArgumentException("映射结果没有任何列: " + target.qualifiedTable());
@@ -62,26 +101,59 @@ public class MergeSqlBuilder {
                     "映射结果缺少单调守卫字段 %s，无法保证乱序保护".formatted(updateTimeField));
         }
 
-        StringBuilder sb = new StringBuilder(256 + chunk.size() * columns.size() * 12);
+        // 每列的 PG 类型也是 SQL 文本的一部分（`?::numeric`），必须进 key。
+        StringBuilder types = new StringBuilder(columns.size() * 8);
+        for (String col : columns) {
+            types.append(meta.pgType(col)).append(',');
+        }
+        SqlKey key = new SqlKey(target.qualifiedTable(), columns, List.copyOf(upsertKeys),
+                updateTimeField, chunk.size(), types.toString());
+
+        String sql = sqlCache.get(key);
+        if (sql == null) {
+            // 守卫与列名都在拼文本，不是参数：参数只承载数据值
+            String built = render(target, meta, columns, updatable, upsertKeys, updateTimeField, chunk.size());
+            if (sqlCache.size() >= MAX_CACHE_SIZE) {
+                sqlCache.clear();
+            }
+            String prev = sqlCache.putIfAbsent(key, built);
+            sql = prev == null ? built : prev;
+        }
+
         List<Object> params = new ArrayList<>(chunk.size() * columns.size());
+        for (FoldedRecord record : chunk) {
+            TargetRow row = record.winnerRow();
+            for (String col : columns) {
+                params.add(row.get(col));
+            }
+        }
+        return new CompiledMerge(sql, params, upsertKeys.size());
+    }
+
+    /** 纯文本渲染：结果只取决于入参与行数，因此可以安全缓存。 */
+    private static String render(TargetRef target,
+                                 TargetTableMeta meta,
+                                 List<String> columns,
+                                 List<String> updatable,
+                                 List<String> upsertKeys,
+                                 String updateTimeField,
+                                 int rowCount) {
+        StringBuilder sb = new StringBuilder(256 + rowCount * columns.size() * 12);
 
         // ---- USING (VALUES ...) ----
         sb.append("MERGE INTO ").append(target.qualifiedTable()).append(" AS tgt\nUSING (VALUES ");
-        for (int r = 0; r < chunk.size(); r++) {
+        for (int r = 0; r < rowCount; r++) {
             if (r > 0) {
                 sb.append(", ");
             }
             sb.append('(');
-            TargetRow row = chunk.get(r).winnerRow();
             for (int c = 0; c < columns.size(); c++) {
                 if (c > 0) {
                     sb.append(", ");
                 }
-                String col = columns.get(c);
                 // 显式 cast 不可省略：VALUES 里的裸参数 PostgreSQL 无法推断类型，
                 // 会直接报 "could not determine data type of parameter"
-                sb.append("?::").append(meta.pgType(col));
-                params.add(row.get(col));
+                sb.append("?::").append(meta.pgType(columns.get(c)));
             }
             sb.append(')');
         }
@@ -136,6 +208,6 @@ public class MergeSqlBuilder {
         }
         sb.append("merge_action() AS __action");
 
-        return new CompiledMerge(sb.toString(), params, upsertKeys.size());
+        return sb.toString();
     }
 }
