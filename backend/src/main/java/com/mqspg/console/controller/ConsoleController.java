@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.mqspg.common.api.ApiResponse;
 import com.mqspg.config.dto.RouteSummaryDto;
 import com.mqspg.config.service.ConfigService;
+import com.mqspg.consumer.ConsumerManager;
+import com.mqspg.consumer.RouteConsumer;
 import com.mqspg.raw.RawProperties;
 import com.mqspg.retry.RetryService;
 import com.mqspg.retry.entity.RtErrorRecord;
@@ -35,6 +37,7 @@ public class ConsoleController {
     private final RtErrorRecordMapper errorRecordMapper;
     private final JdbcTemplate jdbc;
     private final RawProperties rawProperties;
+    private final ConsumerManager consumerManager;
 
     /** 运行总览。 */
     @GetMapping("/overview")
@@ -53,7 +56,14 @@ public class ConsoleController {
         return ApiResponse.ok(data);
     }
 
-    /** 各路由的消费状态。 */
+    /**
+     * 各路由的消费状态。
+     *
+     * <p>「已接收 / 已 ACK / 未 ACK / 批次」来自 {@link RouteConsumer} 的**内存计数**，
+     * 因此语义是「本次启动以来」：进程重启即归零，且多实例部署时只反映本实例。
+     * 没有运行中 Consumer 的路由返回 {@code null}（页面显示 '-'），
+     * 不用 0 冒充「确实没消息」—— 这两件事在排障时完全不同。
+     */
     @GetMapping("/consumer/state")
     public ApiResponse<List<Map<String, Object>>> consumerStates() {
         List<Map<String, Object>> rows = jdbc.queryForList("""
@@ -63,14 +73,22 @@ public class ConsoleController {
                 ORDER BY s.route_id""");
 
         List<Map<String, Object>> data = rows.stream().map(r -> {
+            long routeId = ((Number) r.get("route_id")).longValue();
+            RouteConsumer c = consumerManager.consumerOf(routeId);
+
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("routeId", r.get("route_id"));
+            m.put("routeId", routeId);
             m.put("state", r.get("status"));
             m.put("reason", r.get("reason"));
             m.put("bindVersion", r.get("bind_version"));
             m.put("lastErrorAt", r.get("last_error_at"));
             m.put("lastSuccessAt", r.get("last_success_at"));
             m.put("updatedAt", r.get("updated_at"));
+            m.put("receivedTotal", c == null ? null : c.receivedCount());
+            m.put("ackedTotal", c == null ? null : c.ackedCount());
+            m.put("failedTotal", c == null ? null : c.noAckCount());
+            m.put("batchTotal", c == null ? null : c.batchCount());
+            m.put("pauseReason", c == null ? null : c.pauseReason());
             return m;
         }).toList();
 

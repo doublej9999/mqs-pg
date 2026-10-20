@@ -2,15 +2,27 @@
   <div>
     <el-card class="page-card">
       <div class="page-toolbar">
-        <el-select v-model="query.isFinal" placeholder="全部" clearable style="width: 160px" @change="load">
+        <el-select v-model="query.isFinal" placeholder="全部" clearable style="width: 160px" @change="onFilterChange">
           <el-option label="仅终态（DLQ）" :value="true" />
           <el-option label="仅非终态" :value="false" />
         </el-select>
-        <el-select v-model="query.errorStage" placeholder="全部阶段" clearable style="width: 160px" @change="load">
+        <el-select
+          v-model="query.errorStage"
+          placeholder="全部阶段"
+          clearable
+          style="width: 160px"
+          @change="onFilterChange"
+        >
           <el-option v-for="s in stages" :key="s" :label="s" :value="s" />
         </el-select>
-        <el-input v-model="query.messageId" placeholder="按消息 ID 精确查询" clearable style="width: 280px" @keyup.enter="load" />
-        <el-button type="primary" :icon="Search" @click="load">查询</el-button>
+        <el-input
+          v-model="query.messageId"
+          placeholder="按消息 ID 精确查询"
+          clearable
+          style="width: 280px"
+          @keyup.enter="onFilterChange"
+        />
+        <el-button type="primary" :icon="Search" @click="onFilterChange">查询</el-button>
         <div class="spacer" />
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
@@ -57,13 +69,26 @@
 import { onMounted, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { listErrors } from '@/api/overview'
+import { getErrorStages } from '@/api/meta'
 
-const stages = ['CONSUME', 'TRANSFORM', 'WRITE', 'RETRY', 'ACK']
+// 阶段下拉来自后端枚举（`/api/meta/error-stages`），不在这里硬编码：
+// 硬编码的值域一旦与后端漂移，表现是「某个选项永远查不到数据」而不是报错，
+// 恰恰是最难被发现的那类缺陷。接口失败时退回到空列表并给出提示。
+const stages = ref([])
 
 const loading = ref(false)
 const rows = ref([])
 const total = ref(0)
 const query = ref({ isFinal: undefined, errorStage: '', messageId: '', page: 1, limit: 50 })
+
+async function loadStages() {
+  try {
+    const data = await getErrorStages()
+    stages.value = data?.stages || []
+  } catch {
+    stages.value = []
+  }
+}
 
 async function load() {
   loading.value = true
@@ -87,5 +112,14 @@ function onPageChange(page) {
   load()
 }
 
-onMounted(load)
+// 改筛选条件时回到第 1 页：否则在第 3 页切筛选常常得到空表，看起来像「没有数据」
+function onFilterChange() {
+  query.value.page = 1
+  load()
+}
+
+onMounted(() => {
+  loadStages()
+  load()
+})
 </script>

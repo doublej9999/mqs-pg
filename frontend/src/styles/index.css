@@ -126,6 +126,14 @@ body {
   margin-top: 4px;
 }
 
+/* 页面级说明（表格下方的口径注释等） */
+.page-hint {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 10px;
+}
+
 /* 校验问题清单 */
 .issue-list {
   margin: 0;
