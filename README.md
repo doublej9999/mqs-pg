@@ -329,22 +329,23 @@ mqs-pg/
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
 | 10 优化第一轮：A 稳定性 / B 可观测性 / C 性能 / D 交付 | ✅ A1、B1–B3、C1–C3、D1–D3 已交付 |
-| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | 📋 方案已出（`docs/optimization-plan.md` §5），待排期 |
+| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | 🚧 进行中：K1、K3、G1、G3 已交付（见 `docs/optimization-plan.md` §5），其余待排期 |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
-当前测试总计 **52 个用例**（`@Test` 计数，无 `@ParameterizedTest` / `@Disabled`）：
-配置域 14、管线 9 + 3、重试 8、留存 7、写入 4、折叠 7。
+当前测试总计 **56 个用例**（`@Test` 计数，无 `@ParameterizedTest` / `@Disabled`）：
+配置域 17、管线 9 + 3、重试 9、留存 7、写入 4、折叠 7。
 其中 6 个类（配置域、管线、消费、重试、留存、写入）跑在 **Testcontainers** 的 `postgres:18` 上 ——
 **本机不启 PostgreSQL、仅需 Docker 即可跑通**；`BatchFolderTest` 是纯内存测试。
-最近一次**全量** `mvn test` 的记录见 `evolution.md` 的 D1 / D2 条目（当时 51 个用例全绿）；
-之后的 RawStore 停机排空条目只重跑了 `RawRetentionTest`（7 个，含新增的排空用例），
-所以现在的 `@Test` 总数是 52。重跑方式见下方「测试」一节，需要先启动 Docker。
+最近一次**全量** `mvn test` 记录见 [`evolution.md`](evolution.md) 的 G3 条目（56 全绿）。
+重跑方式见下方「测试」一节，需要先启动 Docker。
 
 优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)（第一轮 A–F 的交付情况归档在 §3，
 第二轮 G–M 的施工图在 §5），每项改动的背景 / 改动 / 验证 / 影响记录见 [`evolution.md`](evolution.md)。
 第一轮已实现：**A1 重试入队幂等、B1 Micrometer 业务指标、B2 自定义健康指示器、B3 MDC 关联日志、
 C1 列表接口消除 N+1、C2 `nextVersionNumber` 聚合查询、C3 留存超大报文跳过解析、
 D1 集成测试迁移 Testcontainers、D2 CI、D3 e2e 脚本参数化**（详见 evolution.md）。
+第二轮已实现：**K1 前端字段契约（含 `/api/meta/*` 枚举下发）、K3 确认框与错误码传递、
+G1 激活并发行锁、G3 重试任务终态出口**。
 
 ### 仍待接入的部分
 
