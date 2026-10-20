@@ -618,6 +618,13 @@ public class ConfigAdminService {
         } catch (org.springframework.dao.DuplicateKeyException e) {
             // UNIQUE(route_id, version) 兜底：并发下两个请求可能同时算到同一个版本号。
             // 直接把 SQLSTATE 23505 抛给页面毫无意义，转成可读提示。
+            // 另外要单独认出「撞的是草稿唯一索引」——那是并发建草稿，
+            // 提示成「版本号冲突」会让人以为是号算错了，方向完全跑偏。
+            String detail = e.getMostSpecificCause().getMessage();
+            if (detail != null && detail.contains("uk_version_draft")) {
+                throw new ProcessingException(ErrorCode.CONFLICT,
+                        "该路由已有草稿版本（并发创建），请刷新后再试");
+            }
             throw new ProcessingException(ErrorCode.CONFIG_MISSING,
                     "版本号冲突（route=%d version=%d），请刷新后重试".formatted(routeId, version));
         }
@@ -636,10 +643,20 @@ public class ConfigAdminService {
         return (max instanceof Number n ? n.intValue() : 0) + 1;
     }
 
+    /**
+     * 找当前草稿。
+     *
+     * <p>正常不会有多行 —— `V2` 加了部分唯一索引 `uk_version_draft` 兜底。
+     * 但读的时候仍显式 `ORDER BY version DESC LIMIT 1`：迁移清理过的库里
+     * 可能还留着被降级的旧草稿痕迹，且「不确定挑哪一行」是上一版的隐患，
+     * 让它保持确定性没有任何代价。
+     */
     private CfgVersion findDraft(long routeId) {
         List<CfgVersion> drafts = versionMapper.selectList(Wrappers.<CfgVersion>lambdaQuery()
                 .eq(CfgVersion::getRouteId, routeId)
-                .eq(CfgVersion::getStatus, "DRAFT"));
+                .eq(CfgVersion::getStatus, "DRAFT")
+                .orderByDesc(CfgVersion::getVersion)
+                .last("LIMIT 1"));
         return drafts.isEmpty() ? null : drafts.get(0);
     }
 

@@ -7,6 +7,51 @@
 ---
 
 #
+## 2026-10-20 · V2 迁移：草稿唯一索引 + 四个状态 CHECK + 错误流水索引（G4 / I7 / J6）
+
+- **背景**
+  - **G4**：「每个路由至多一个草稿」只有应用层约束（`findDraft` 判空后插入）。
+    并发 `saveDraft` / `createVersion` 都能通过判空、各插一行 DRAFT，
+    此后 `getDraft` 命中哪一行不确定 —— 页面会反复丢失刚编辑的内容。
+  - **I7**：四个状态列（`cfg_route.status` / `cfg_version.status` /
+    `rt_consumer_state.status` / `rt_retry_task.status`）都没有 CHECK。拼错的状态值不报错，
+    只让按 status 过滤的查询静默漏掉该行（注册表加载、消费者调度都按 status 过滤），
+    表现为「路由配了但不消费」—— 本项目最怕的静默失败类型。
+  - **J6**：控制台查错误流水是「`is_final` / `error_stage` / `message_id` + `ORDER BY id DESC`」，
+    而 V1 只建了 `(route_id) WHERE is_final`（前缀形状不匹配，用不上）与 `(message_id)`。
+
+- **改动**
+  - 新增 `V2__constraints_and_indexes.sql`（**刻意不改 V1**：校验和一变，
+    已经在跑的库会直接拒绝启动）。三个任务按 §4 的合并策略放进同一个迁移。
+  - G4：先用 `row_number() OVER (PARTITION BY route_id ORDER BY version DESC)` 把存量
+    重复草稿清理成一份 —— 保留版本号最大的，其余降级为 `INACTIVE` 并在 `change_note`
+    留痕（不直接删，那是在删用户的编辑）；再建部分唯一索引 `uk_version_draft`。
+  - I7：四个 `CHECK (status IN (...))`，用 `NOT VALID` + `VALIDATE` 两步 ——
+    先加约束只对之后的写入生效，再单独校验存量，失败信息能指向具体步骤。
+  - J6：补 `(is_final, id DESC)` 与 `(error_stage, id DESC)`。
+
+- **验证**
+  - 新增 `SchemaConstraintsTest`（4 条，直接用裸 SQL 打库 —— 服务层本来就写不错，
+    用服务调用测不出约束）：路由状态拼错被 `ck_cfg_route_status` 拒绝；
+    版本/重试任务/消费状态三列同样被拒；同路由两个 DRAFT 撞 `uk_version_draft`
+    而多个非 DRAFT 可以共存；两个新索引存在。
+  - `mvn test`：62 passed（58 + 4），Flyway 在 Testcontainers 空库上顺序执行 V1→V2 通过。
+  - 期间踩到两次，都记在这里：① `cfg_version` **没有** `updated_at` 列（V1 里只有
+    `created_at` / `published_at`），迁移里的 `SET updated_at = now()` 直接让 51 个用例失败；
+    ② `UPDATE` 影响 0 行时**不会**触发 CHECK，所以约束用例必须自建能命中的行，
+    否则测出来的是「什么也没发生」—— 第一版就写成 `WHERE id = -1` 了。
+
+- **影响与回滚**
+  - 迁移是向前兼容的（只加约束与索引，不改列）。存量库若存在 CHECK 集合外的状态值，
+    `VALIDATE CONSTRAINT` 会失败并指名是哪张表 —— 这是刻意的：宁可迁移失败，
+    也不要让脏状态继续静默存在。
+  - 部分唯一索引会让并发的第二次建草稿得到 23505；`insertVersion` 已把它翻成
+    「该路由已有草稿版本（并发创建），请刷新后再试」，而不是「版本号冲突」。
+  - 回滚：`DROP INDEX uk_version_draft; ALTER TABLE ... DROP CONSTRAINT ck_*;
+    DROP INDEX idx_error_final_id, idx_error_stage_id;`（建议写成 V3 而不是删 V2 文件）。
+
+---
+
 ## 2026-10-20 · G2 发布/保存的状态更新不加条件，会互相覆盖
 
 - **背景**
