@@ -208,7 +208,7 @@
           回滚到上一版
         </el-button>
         <div class="spacer" />
-        <el-button :icon="Refresh" size="small" @click="openVersions(current)">刷新</el-button>
+        <el-button :icon="Refresh" size="small" @click="reloadVersions">刷新</el-button>
       </div>
       <div v-if="hasDraft" class="form-hint" style="margin-bottom: 8px">
         已有草稿版本。发布或删除它之后才能新建下一个版本。
@@ -385,7 +385,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="" width="60" align="center">
+        <el-table-column label="操作" width="60" align="center">
           <template #default="{ $index }">
             <el-button link type="danger" size="small" @click="mappings.splice($index, 1)">
               删除

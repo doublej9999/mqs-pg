@@ -14,7 +14,7 @@
         <el-select v-model="query.status" placeholder="全部状态" clearable style="width: 150px" @change="load">
           <el-option v-for="s in statuses" :key="s" :label="s" :value="s" />
         </el-select>
-        <el-input-number v-model="query.limit" :min="1" :max="500" :step="50" style="width: 130px" />
+        <el-input-number v-model="query.limit" :min="1" :max="500" :step="50" style="width: 130px" @change="load" />
         <el-button type="primary" :icon="Search" @click="load">查询</el-button>
         <div class="spacer" />
         <el-tag v-for="(count, status) in summary" :key="status" :type="tagType(status)" effect="plain">

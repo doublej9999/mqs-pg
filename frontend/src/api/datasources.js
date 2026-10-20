@@ -6,6 +6,7 @@ export function listDatasources() {
   return request({ url: '/datasources', method: 'get' })
 }
 
+// 预留：列表页已带出全部字段，详情接口暂时用不上（后端 GET /api/datasources/{id} 可用）。
 export function getDatasource(id) {
   return request({ url: `/datasources/${id}`, method: 'get' })
 }

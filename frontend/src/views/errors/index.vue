@@ -77,7 +77,7 @@
 <script setup>
 import { onActivated, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { listErrors } from '@/api/overview'
+import { listErrors } from '@/api/errors'
 import { getErrorStages } from '@/api/meta'
 
 // 阶段下拉来自后端枚举（`/api/meta/error-stages`），不在这里硬编码：

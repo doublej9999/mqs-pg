@@ -69,7 +69,7 @@
 <script setup>
 import { computed, onActivated, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { listRawMessages } from '@/api/overview'
+import { listRawMessages } from '@/api/raw'
 
 const loading = ref(false)
 const loadError = ref('')
