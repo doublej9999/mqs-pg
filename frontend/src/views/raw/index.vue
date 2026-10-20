@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { listRawMessages } from '@/api/overview'
 
@@ -107,5 +107,6 @@ function openDetail(row) {
   detailVisible.value = true
 }
 
-onMounted(load)
+// K2：切回本页要看到最新数据，见 retry/index.vue 的说明
+onActivated(load)
 </script>

@@ -1,5 +1,12 @@
 <template>
   <div v-loading="loading">
+    <div class="toolbar-row">
+      <span class="toolbar-hint">
+        {{ autoRefresh ? '每 30 秒自动刷新' : '手动刷新' }}
+      </span>
+      <el-switch v-model="autoRefresh" active-text="自动刷新" size="small" />
+      <el-button :icon="Refresh" size="small" @click="refresh">刷新</el-button>
+    </div>
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-label">活跃路由</div>
@@ -82,7 +89,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import {
+  computed,
+  onActivated,
+  onDeactivated,
+  onUnmounted,
+  ref,
+  watch
+} from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getOverview, getPgHealth, listConsumerStates } from '@/api/overview'
 import { retrySummaryByState } from '@/api/retry'
@@ -170,5 +184,81 @@ async function loadAll() {
   loading.value = false
 }
 
-onMounted(loadAll)
+/**
+ * K2：用 onActivated 而不是 onMounted 取数。
+ *
+ * 视图被 <keep-alive> 缓存，onMounted 只在**首次**挂载时触发一次 ——
+ * 从「总览」切到「重试队列」再切回来，看到的是首次进入时的快照。
+ * 对运维面板这是实质性缺陷：用户以为看到的是现在。
+ * onActivated 在首次挂载时也会触发，因此可以完全替代 onMounted。
+ */
+async function refresh() {
+  await loadAll()
+}
+
+// 轮询：默认关闭（不是每个部署都希望面板自转），开关在页面右上角
+const autoRefresh = ref(false)
+let timer = null
+
+function stopTimer() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function startTimer() {
+  stopTimer()
+  if (!autoRefresh.value) return
+  // 轮询刷新**不**把整页打成 loading 骨架（loadAll 内部会置 loading），
+  // 否则每 30 秒页面闪一下，反而更难读
+  timer = setInterval(() => {
+    if (loading.value) return // 上一轮还没回来，跳过本次，避免请求叠加
+    quietRefresh()
+  }, 30000)
+}
+
+/** 静默刷新：不触发 loading 骨架 */
+async function quietRefresh() {
+  const [ov, sum, states, health] = await Promise.allSettled([
+    getOverview(),
+    retrySummaryByState(),
+    listConsumerStates(),
+    getPgHealth()
+  ])
+  if (ov.status === 'fulfilled') overview.value = ov.value || {}
+  if (sum.status === 'fulfilled') summary.value = sum.value || {}
+  if (states.status === 'fulfilled') consumerStates.value = states.value || []
+  if (health.status === 'fulfilled') {
+    const h = health.value || {}
+    pgHealthy.value = h.healthy !== false
+    pgDetail.value = describePgHealth(h)
+  }
+}
+
+watch(autoRefresh, (on) => (on ? startTimer() : stopTimer()), { immediate: false })
+
+onActivated(() => {
+  refresh()
+  startTimer()
+})
+
+// 缓存组件**不会**被卸载，只写 onUnmounted 会漏掉定时器
+onDeactivated(stopTimer)
+onUnmounted(stopTimer)
 </script>
+
+<style scoped>
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.toolbar-hint {
+  font-size: 12px;
+  color: #909399;
+}
+</style>

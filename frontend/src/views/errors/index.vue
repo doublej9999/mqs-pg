@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onActivated, ref } from 'vue'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { listErrors } from '@/api/overview'
 import { getErrorStages } from '@/api/meta'
@@ -118,7 +118,8 @@ function onFilterChange() {
   load()
 }
 
-onMounted(() => {
+// K2：切回本页要看到最新数据，见 retry/index.vue 的说明
+onActivated(() => {
   loadStages()
   load()
 })

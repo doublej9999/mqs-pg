@@ -103,7 +103,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { cancelRetryTask, getRetryTask, listRetry, replayRetryTask, retrySummary } from '@/api/retry'
@@ -195,5 +195,7 @@ async function onCancel(row) {
   }
 }
 
-onMounted(load)
+// K2：视图被 keep-alive 缓存，onMounted 只在首次挂载时触发 —— 切回来看到的是旧快照。
+// onActivated 首次挂载也会触发，可直接替代 onMounted。
+onActivated(load)
 </script>
