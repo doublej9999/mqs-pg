@@ -105,6 +105,15 @@ public class DbConfigRegistry implements ConfigRegistry {
     }
 
     @Override
+    public void evict(long routeId, int version) {
+        VersionKey key = new VersionKey(routeId, version);
+        RouteConfig removed = snapshots.remove(key);
+        if (removed != null) {
+            log.info("路由 {} 的版本 {} 已删除，内存快照已驱逐", routeId, version);
+        }
+    }
+
+    @Override
     public void refreshAll() {
         List<CfgRoute> routes = routeMapper.selectList(
                 Wrappers.<CfgRoute>lambdaQuery().eq(CfgRoute::getStatus, "ACTIVE"));
@@ -121,9 +130,22 @@ public class DbConfigRegistry implements ConfigRegistry {
         return ref == null ? null : ref.get();
     }
 
+    /**
+     * 载入某个路由的当前 ACTIVE 快照。
+     *
+     * <p>**必须校验 {@code route.status}**：`refreshAll` 只捞 ACTIVE 路由，
+     * 但 `refresh(routeId)` 是事件驱动的（路由被改、版本被激活），
+     * 此时路由可能刚被停用。不判状态的话，注册表会继续持有它的 ACTIVE 快照，
+     * `activeVersion()` 也照样返回值，而消费者已被停掉 ——
+     * 「注册表认为在跑、实际没在跑」，排查时最费时的那类不一致。
+     */
     private RouteConfig loadActive(long routeId) {
         CfgRoute route = routeMapper.selectById(routeId);
         if (route == null || route.getActiveVersion() == null) {
+            return null;
+        }
+        if (!"ACTIVE".equals(route.getStatus())) {
+            log.info("路由 {} 状态为 {}，不视为生效路由", routeId, route.getStatus());
             return null;
         }
         return loadSnapshot(routeId, route.getActiveVersion());

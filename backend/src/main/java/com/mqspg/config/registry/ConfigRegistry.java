@@ -37,4 +37,17 @@ public interface ConfigRegistry {
 
     /** 全量重载。 */
     void refreshAll();
+
+    /**
+     * 丢弃某个版本的内存快照（版本被删除后调用）。
+     *
+     * <p>为什么需要它：快照表只增不删是刻意的（PRD §19 要求历史版本不被动态替换），
+     * 但「版本已被删除」和「版本还在、只是不常用了」是两件事 ——
+     * 后者必须留着，前者留着会让重试重放时而有配置、时而没有，
+     * 表现为「同一条消息重试三次有时成功有时 CONFIG_GONE」。
+     *
+     * <p>实现上只移除 {@code snapshots} 里的那一项。
+     * 调用方负责保证被删的不是 ACTIVE 版本（{@code deleteVersion} 已经拦住）。
+     */
+    void evict(long routeId, int version);
 }

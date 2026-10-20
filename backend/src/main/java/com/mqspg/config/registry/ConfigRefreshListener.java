@@ -45,6 +45,11 @@ public class ConfigRefreshListener {
                     registry.refresh(routeId);
                     consumerManager.ensureStarted(routeId);
                 }
+                case VERSION_DELETED -> {
+                    // 只驱逐快照，不动消费者：被删的是非生效版本
+                    // （生效版本在 deleteVersion 里就被拦住了）
+                    registry.evict(routeId, event.version());
+                }
             }
         } catch (Exception e) {
             // 刷新失败不应影响已提交的配置变更；下一次 refreshAll 会纠正

@@ -22,6 +22,7 @@ import com.mqspg.config.entity.CfgRoute;
 import com.mqspg.config.entity.CfgTarget;
 import com.mqspg.config.entity.CfgVersion;
 import com.mqspg.config.event.ConfigChangedEvent;
+import com.mqspg.config.event.DatasourceChangedEvent;
 import com.mqspg.config.mapper.CfgDatasourceMapper;
 import com.mqspg.config.mapper.CfgRouteMapper;
 import com.mqspg.config.mapper.CfgTargetMapper;
@@ -30,7 +31,6 @@ import com.mqspg.config.mapper.RtConsumerStateMapper;
 import com.mqspg.config.registry.RouteConfigAssembler;
 import com.mqspg.retry.entity.RtRetryTask;
 import com.mqspg.retry.mapper.RtRetryTaskMapper;
-import com.mqspg.writer.datasource.TargetDataSourceRegistry;
 import com.mqspg.writer.metadata.ColumnMeta;
 import com.mqspg.writer.metadata.TargetMetadataReader;
 import com.mqspg.writer.metadata.TargetTableMeta;
@@ -77,7 +77,6 @@ public class ConfigAdminService {
     private final RtConsumerStateMapper consumerStateMapper;
     private final RtRetryTaskMapper retryTaskMapper;
     private final PasswordCodec passwordCodec;
-    private final TargetDataSourceRegistry dataSources;
     private final TargetMetadataReader metadataReader;
     private final RouteConfigAssembler assembler;
     private final ConfigValidator validator;
@@ -150,8 +149,13 @@ public class ConfigAdminService {
         }
         datasourceMapper.updateById(patch);
 
-        // 连接参数可能已变，丢弃旧池，下次使用按新参数重建
-        dataSources.invalidate(id);
+        // 连接参数可能已变，丢弃旧池，下次使用按新参数重建。
+        // 但**不能在这里直接 invalidate**：事务还没提交就把池 close 掉，
+        // 正在该池上执行 MERGE 的消费线程会收到连接中断 —— 消息不会丢（会被重投），
+        // 但会产生一批本可避免的 PG_CONNECTION_ERROR 与闸门抖动；
+        // 而且若本事务随后回滚，池已销毁而配置没变，要等下一次惰性重建。
+        // 改为发布事件，由 AFTER_COMMIT 监听器处理。
+        events.publishEvent(new DatasourceChangedEvent(id));
         log.info("数据源已更新: id={} name={}（旧名 {}）", id, req.name(), existing.getName());
         return toDatasourceDto(requireDatasource(id));
     }
@@ -167,7 +171,8 @@ public class ConfigAdminService {
                             ds.getName(), refs.size(), targetNames(refs)));
         }
         datasourceMapper.deleteById(id);
-        dataSources.invalidate(id);
+        // 同样等到提交之后再关池，理由见 updateDatasource
+        events.publishEvent(new DatasourceChangedEvent(id));
         log.info("数据源已删除: id={} name={}", id, ds.getName());
     }
 
@@ -531,6 +536,9 @@ public class ConfigAdminService {
                             .formatted(version, bound) + "确认丢弃可加 force=true");
         }
         versionMapper.deleteById(v.getId());
+        // 提交后由 AFTER_COMMIT 监听器驱逐这个版本的内存快照：
+        // 不驱逐的话它在注册表里还活着，重试重放时而有配置、时而 CONFIG_GONE
+        events.publishEvent(ConfigChangedEvent.versionDeleted(routeId, version));
         log.info("配置版本已删除: route={} version={} 绑定任务={}", routeId, version, bound);
     }
 
