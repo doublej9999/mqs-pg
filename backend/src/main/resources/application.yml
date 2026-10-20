@@ -31,6 +31,13 @@ spring:
     default-schema: mqs_pg
     schemas: mqs_pg
     locations: classpath:db/migration
+    # 本地/dev 保留 true：空库首次启动需要 Flyway 自己建 schema。
+    #
+    # ⚠ 但它在生产上是有害的（里程碑 I8）：指向「已有表但没有
+    # flyway_schema_history」的库时，Flyway 会把现状 baseline 成 V1 而
+    # **不执行** V1__init_schema.sql，表缺失要等第一次查询才暴露。
+    # 生产请用 application-prod.yml.example —— 那里显式置 false，
+    # 让这种库在**启动阶段**就失败。
     baseline-on-migrate: true
     validate-on-migrate: true
 

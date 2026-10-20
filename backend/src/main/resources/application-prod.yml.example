@@ -1,0 +1,46 @@
+# 生产 profile 配置样例（里程碑 I8）
+#
+# 用法：复制为 application-prod.yml 并按环境填值，启动时加
+#   SPRING_PROFILES_ACTIVE=prod
+#
+# 本文件**不参与**默认启动（扩展名是 .example），所以里面的占位值不会被误用。
+
+spring:
+  datasource:
+    url: ${MQS_PG_DB_URL:jdbc:postgresql://localhost:5432/postgres?currentSchema=mqs_pg,public}
+    username: ${MQS_PG_DB_USER:postgres}
+    password: ${MQS_PG_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+
+  flyway:
+    enabled: true
+    # ⚠ 生产必须是 false（里程碑 I8）。
+    #
+    # 默认的 application.yml 里是 true，那是为了本地/dev 方便：空库上第一次启动，
+    # Flyway 需要自己能建 schema。
+    #
+    # 但在生产上 true 是**危险**的：当它指向一个「已有表但没有 flyway_schema_history」
+    # 的库时，Flyway 会把现状直接 baseline 成 V1 而**不执行** V1__init_schema.sql，
+    # 随后表缺失要等到第一次查询才暴露 —— 与 AGENTS.md 记录的「Flyway 静默不建表」
+    # 是同一类失败：启动成功、健康检查通过、业务在第一次写入时才炸。
+    #
+    # 置 false 后，这种情况会在启动阶段直接失败并给出可读提示，故障暴露在最前面。
+    # 若确实要接管一个存量库，请显式设 baseline-version + 手工建表脚本，
+    # 不要依赖自动 baseline。
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    baseline-version: 0
+
+management:
+  endpoint:
+    health:
+      # 生产不对外暴露细节；liveness / readiness 分组见主配置
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.mqspg: INFO
