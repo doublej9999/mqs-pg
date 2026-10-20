@@ -329,16 +329,21 @@ mqs-pg/
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
 | 10 优化第一轮：A 稳定性 / B 可观测性 / C 性能 / D 交付 | ✅ A1、B1–B3、C1–C3、D1–D3 已交付 |
-| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | 🚧 进行中：**里程碑 G 全部交付**，K1 / K3 已交付（见 `docs/optimization-plan.md` §5），其余待排期 |
+| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | 🚧 进行中：**里程碑 G、H 全部交付**，K1 / K3 已交付（见 `docs/optimization-plan.md` §5），其余待排期 |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
-当前测试总计 **65 个用例**（`@Test` 计数，无 `@ParameterizedTest` / `@Disabled`）：
-配置域 20、约束 4、注册表 2、管线 9 + 3、重试 9、留存 7、写入 4、折叠 7。
-其中 8 个类（配置域、约束、注册表、管线、消费、重试、留存、写入）跑在 **Testcontainers** 的 `postgres:18` 上 ——
-**本机不启 PostgreSQL、仅需 Docker 即可跑通**；`BatchFolderTest` 是纯内存测试。
+当前测试总计 **83 个用例**（`@Test` 计数，无 `@ParameterizedTest` / `@Disabled`）：
+配置域 20、约束 4、注册表 3、管线 9 + 3、重试 9、留存 7、写入 4、折叠 7、
+异常映射 5、健康指示器 4、健康分组 2、闸门 2、监听器 4。
+其中 9 个类（配置域、约束、注册表、管线、消费、重试、留存、写入、健康分组）跑在
+**Testcontainers** 的 `postgres:18` 上 ——
+**本机不启 PostgreSQL、仅需 Docker 即可跑通**；其余（折叠、异常映射、健康指示器、闸门、监听器）
+是纯内存 / mock 测试。
 Flyway 依次执行 `V1__init_schema.sql` → `V2__constraints_and_indexes.sql`（V2 加草稿唯一索引、
 四个状态 CHECK 与错误流水索引）。
-最近一次**全量** `mvn test` 记录见 [`evolution.md`](evolution.md) 的 G5/G6/G7 条目（65 全绿）。
+健康检查分 `liveness`（`ping,diskSpace`）与 `readiness`（`db,mqsPg`）两组：
+前者失败才该重启 Pod，后者失败只该摘流量。
+最近一次**全量** `mvn test` 记录见 [`evolution.md`](evolution.md) 的里程碑 H 条目（83 全绿）。
 重跑方式见下方「测试」一节，需要先启动 Docker。
 
 优化工作的整体方案见 [`docs/optimization-plan.md`](docs/optimization-plan.md)（第一轮 A–F 的交付情况归档在 §3，
@@ -349,7 +354,10 @@ D1 集成测试迁移 Testcontainers、D2 CI、D3 e2e 脚本参数化**（详见
 第二轮已实现：**K1 前端字段契约（含 `/api/meta/*` 枚举下发）、K3 确认框与错误码传递、
 G1 激活并发行锁、G2 发布/保存条件更新、G3 重试任务终态出口、G4 草稿唯一索引、
 G5 运行状态行 upsert、G6 连接池提交后失效、G7 注册表状态与快照驱逐、
-I7 状态列 CHECK、J6 错误流水索引**。
+I7 状态列 CHECK、J6 错误流水索引、
+H1 注册表周期性对账、H2 健康探针读缓存、H3 PG 健康聚合视图、
+H4 异常映射（`NOT_FOUND` / `INVALID_INPUT` + traceId）、
+H5 数据源缺失边界、H6 失败路径日志、H7 liveness / readiness 分组**。
 
 ### 仍待接入的部分
 
