@@ -19,12 +19,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 重试任务的持久化（ADR-02）。
@@ -50,6 +52,9 @@ public class RetryService {
     /** 重试积压的 gauge 持有者；由定时任务刷新，抓取时不打 DB。 */
     private final Map<String, AtomicLong> backlogGauges = new ConcurrentHashMap<>();
 
+    /** 最近一次成功刷新积压指标的时间；从未刷新过则为 null（健康检查据此判断过期）。 */
+    private final AtomicReference<OffsetDateTime> lastRefreshAt = new AtomicReference<>();
+
     /**
      * 注册积压指标 holder。
      *
@@ -74,10 +79,36 @@ public class RetryService {
                 Object v = counts.get(status);
                 holder.set(v instanceof Number n ? n.longValue() : 0L);
             });
+            lastRefreshAt.set(OffsetDateTime.now());
         } catch (RuntimeException e) {
             // 指标刷新失败不应影响主链路
             log.debug("刷新重试积压指标失败: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 只读的内存积压快照 —— 供健康检查这类高频调用使用，**不查库**。
+     *
+     * <p>此前 {@link com.mqspg.metrics.MqsPgHealthIndicator} 直接调 {@link #summary()}，
+     * 而后者是一条 {@code GROUP BY status}。K8s / 负载均衡通常每 5–10s 探一次
+     * {@code /actuator/health}，等于把一次聚合查询挂到了探针频率上；
+     * DB 不可用时 health 还会跟着变慢。明明已经有一套 15s 刷新的内存 gauge，却没用上。
+     *
+     * <p>返回值的 {@code stale} 表示数据是否已过期（超过 {@code staleAfter}）。
+     * 过期的积压数据**不作为 DOWN 的依据** —— 探针要回答的是「进程能否服务」，
+     * 而不是「指标是否新鲜」；把过期判成 DOWN 会让一次指标刷新失败直接触发实例被摘。
+     *
+     * @param staleAfter 多久没刷新就算过期
+     */
+    public Map<String, Object> cachedSummary(Duration staleAfter) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        backlogGauges.forEach((status, holder) -> out.put(status, holder.get()));
+        OffsetDateTime at = lastRefreshAt.get();
+        boolean stale = at == null
+                || staleAfter != null && at.isBefore(OffsetDateTime.now().minus(staleAfter));
+        out.put("stale", stale);
+        out.put("refreshedAt", at == null ? null : at.toString());
+        return out;
     }
 
     /**

@@ -10,6 +10,7 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,18 +45,23 @@ public class MqsPgHealthIndicator implements HealthIndicator {
     private final double dropRatioThreshold;
     private final long dropSampleMin;
 
+    /** 积压缓存超过多久算过期（只标注 stale，不据此判 DOWN）。 */
+    private final Duration backlogStaleAfter;
+
     public MqsPgHealthIndicator(PgHealthGate healthGate,
                                 RetryService retryService,
                                 RawStore rawStore,
                                 @Value("${mqs-pg.health.retry-backlog-threshold:10000}") long backlogThreshold,
                                 @Value("${mqs-pg.health.raw-drop-ratio-threshold:0.1}") double dropRatioThreshold,
-                                @Value("${mqs-pg.health.raw-drop-sample-min:1000}") long dropSampleMin) {
+                                @Value("${mqs-pg.health.raw-drop-sample-min:1000}") long dropSampleMin,
+                                @Value("${mqs-pg.health.retry-backlog-stale-after:45s}") Duration backlogStaleAfter) {
         this.healthGate = healthGate;
         this.retryService = retryService;
         this.rawStore = rawStore;
         this.backlogThreshold = backlogThreshold;
         this.dropRatioThreshold = dropRatioThreshold;
         this.dropSampleMin = dropSampleMin;
+        this.backlogStaleAfter = backlogStaleAfter;
     }
 
     @Override
@@ -80,23 +86,33 @@ public class MqsPgHealthIndicator implements HealthIndicator {
             anyDown = true;
         }
 
-        // 2) 重试积压
+        // 2) 重试积压 —— 读内存缓存的 gauge，**不查库**
+        //
+        // 这里原来直接调 retryService.summary()，那是一次 GROUP BY status。
+        // K8s / 负载均衡通常每 5–10s 探一次 /actuator/health，
+        // 等于把聚合查询挂到了探针频率上，DB 不可用时 health 还会跟着变慢。
+        // 明明已有 15s 刷新的 gauge，用缓存即可。
         long pending = 0;
         long dlq = 0;
+        boolean stale = false;
         try {
-            Map<String, Object> summary = retryService.summary();
+            Map<String, Object> summary = retryService.cachedSummary(backlogStaleAfter);
             pending = num(summary.get("PENDING")) + num(summary.get("RUNNING"));
             dlq = num(summary.get("DLQ"));
+            stale = Boolean.TRUE.equals(summary.get("stale"));
         } catch (RuntimeException e) {
-            // 查不动积压本身就是异常信号，但不能让 health 端点抛 500
+            // 读内存不该失败，但 health 端点绝不抛 500
             log.warn("健康检查读取重试积压失败: {}", e.getMessage());
-            details.put("retryBacklogError", e.getMessage());
+            details.put("retryBacklogError", "积压读取失败");
             degraded = true;
         }
         Map<String, Object> backlogDetail = new LinkedHashMap<>();
         backlogDetail.put("pending", pending);
         backlogDetail.put("dlq", dlq);
         backlogDetail.put("threshold", backlogThreshold);
+        // 过期只标注、不判 DOWN：探针要回答「能否服务」，不是「指标是否新鲜」。
+        // 判 DOWN 会让一次指标刷新失败直接导致实例被摘掉。
+        backlogDetail.put("stale", stale);
         details.put("retryBacklog", backlogDetail);
         if (pending > backlogThreshold) {
             degraded = true;
