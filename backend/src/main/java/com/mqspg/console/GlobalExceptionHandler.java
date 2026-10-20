@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -71,6 +72,28 @@ public class GlobalExceptionHandler {
         log.warn("请求体无法解析 traceId={} 原因={}", traceId, e.getMostSpecificCause().getMessage());
         return ResponseEntity.badRequest()
                 .body(ApiResponse.fail("INVALID_INPUT", "请求体不是合法 JSON", traceId));
+    }
+
+    /**
+     * Bean Validation 失败（DTO 上的 {@code @NotBlank} / {@code @Size} 等）。
+     *
+     * <p>为什么要把字段级信息带出去：这类错误的全部价值就在「哪个字段、为什么」。
+     * 只说「参数不合法」等于让用户回去自己试。这里把 {@code field: message}
+     * 拼进 {@code message}（前端表单下方直接展示），同时原样保留在日志里。
+     *
+     * <p>取 {@code getDefaultMessage()} 而不是 Jackson/Spring 的原始描述 ——
+     * 注解上的 message 已经是中文，直接可用。
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException e) {
+        String traceId = newTraceId();
+        String detail = e.getBindingResult().getFieldErrors().stream()
+                .map(f -> "%s: %s".formatted(f.getField(), f.getDefaultMessage()))
+                .distinct()
+                .collect(java.util.stream.Collectors.joining("；"));
+        log.warn("请求参数校验未通过 traceId={} 明细={}", traceId, detail);
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.fail("INVALID_INPUT", detail.isEmpty() ? "请求参数不合法" : detail, traceId));
     }
 
     /** 路径/查询参数类型不对，例如 {@code /api/routes/abc}。同样是调用方可修正的错误。 */

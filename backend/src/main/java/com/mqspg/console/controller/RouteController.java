@@ -13,6 +13,7 @@ import com.mqspg.config.service.ConfigService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -57,14 +58,14 @@ public class RouteController {
 
     /** 新建路由。初始为 INACTIVE，需再配一个版本并激活才会开始消费。 */
     @PostMapping
-    public ApiResponse<RouteSummaryDto> create(@RequestBody RouteRequest req) {
+    public ApiResponse<RouteSummaryDto> create(@Valid @RequestBody RouteRequest req) {
         return ApiResponse.ok(admin.createRoute(req));
     }
 
     /** 修改路由。Topic/Tag 变化会重建消费者。 */
     @PutMapping("/{routeId}")
     public ApiResponse<RouteSummaryDto> update(@PathVariable long routeId,
-                                               @RequestBody RouteRequest req) {
+                                               @Valid @RequestBody RouteRequest req) {
         return ApiResponse.ok(admin.updateRoute(routeId, req));
     }
 

@@ -10,6 +10,7 @@ import com.mqspg.config.service.IntrospectionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -46,12 +47,12 @@ public class DatasourceController {
     }
 
     @PostMapping
-    public ApiResponse<DatasourceDto> create(@RequestBody DatasourceRequest req) {
+    public ApiResponse<DatasourceDto> create(@Valid @RequestBody DatasourceRequest req) {
         return ApiResponse.ok(admin.createDatasource(req));
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<DatasourceDto> update(@PathVariable long id, @RequestBody DatasourceRequest req) {
+    public ApiResponse<DatasourceDto> update(@PathVariable long id, @Valid @RequestBody DatasourceRequest req) {
         return ApiResponse.ok(admin.updateDatasource(id, req));
     }
 

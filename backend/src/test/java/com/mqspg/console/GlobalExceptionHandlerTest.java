@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -91,6 +92,39 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.BAD_REQUEST.value(), handler.handleTypeMismatch(
                 new org.springframework.web.method.annotation.MethodArgumentTypeMismatchException(
                         "abc", long.class, "id", null, null)).getStatusCode().value());
+    }
+
+    /**
+     * DTO 上的 {@code @NotBlank} / {@code @Size} 由 Bean Validation 拦下，
+     * 落到这个处理器。**字段级提示必须带出去** —— 这类错误的全部价值就在
+     * 「哪个字段、为什么」，只说「参数不合法」等于让用户回去自己试。
+     */
+    @Test
+    @DisplayName("Bean Validation 失败带字段级中文提示")
+    void validationCarriesFieldDetail() {
+        var target = new com.mqspg.config.dto.RouteRequest("", "x".repeat(300), null, null);
+        var validator = jakarta.validation.Validation
+                .buildDefaultValidatorFactory().getValidator();
+        var violations = validator.validate(target);
+
+        MethodArgumentNotValidException e = new MethodArgumentNotValidException(
+                null, new org.springframework.validation.BeanPropertyBindingResult(target, "routeRequest"));
+        violations.forEach(v -> e.getBindingResult().addError(
+                new org.springframework.validation.FieldError("routeRequest", v.getPropertyPath().toString(),
+                        v.getMessage())));
+
+        ResponseEntity<ApiResponse<Void>> r = handler.handleValidation(e);
+
+        assertEquals(HttpStatus.BAD_REQUEST.value(), r.getStatusCode().value());
+        String msg = r.getBody().message();
+        // 三个字段各自的问题都要出现
+        assertTrue(msg.contains("name"), () -> "缺 name 的提示: " + msg);
+        assertTrue(msg.contains("topic"), () -> "缺 topic 的提示: " + msg);
+        assertTrue(msg.contains("targetId"), () -> "缺 targetId 的提示: " + msg);
+        // 超长提示要给出具体上限，而不是 PG 的 SQLSTATE 22001 原文
+        assertTrue(msg.contains("256"), () -> "应指出长度上限: " + msg);
+        assertFalse(msg.contains("22001"), () -> "不该出现数据库原始错误: " + msg);
+        assertTrue(msg.contains("traceId="));
     }
 
     private void assertStatus(HttpStatus expected, ErrorCode code) {
