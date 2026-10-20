@@ -7,6 +7,120 @@
 ---
 
 #
+## 2026-10-21 · 里程碑 I 全部交付（I1–I8 校验前置）
+
+主题是「校验本该在保存/发布时就拦下，却全都推迟到运行期」。
+逐条记录，含两次被测试纠正的判断错误。
+
+- **I1 starter-validation 引入了却零使用**
+  - 背景：`pom.xml` 有 `spring-boot-starter-validation`，全仓
+    `@Valid|@NotNull|@Size` **零命中**；长度校验全靠三个只判空的
+    `requireXxxFields`。于是 `topic` 超 256 直接撞 `VARCHAR(256)`，
+    用户看到 SQLSTATE 22001 原文。
+  - 改动：三个请求 DTO 加注解，**上限逐个照抄 DDL**（name≤128/64、
+    topic≤256、tag≤256、schema/table/updateTimeField≤64、jdbcUrl≤1024、
+    username≤128）；5 个写接口加 `@Valid`；`GlobalExceptionHandler`
+    新增 `MethodArgumentNotValidException` → 400 + `field: message` 拼接。
+  - **空值规则必须逐个对照 DDL**：`tag` 有 `DEFAULT ''` 所以只限长度不加
+    `@NotBlank`；`password` 允许为空（修改时「留空 = 保留原密码」），
+    加了 `@NotBlank` 就直接废掉改其他字段的接口。
+  - 手工 `require*Fields` 保留 —— 它们还要管跨表校验（名称重复、
+    同数据源同表、数据源被引用），注解表达不了。
+
+- **I2 `validateJslt` 是死代码**
+  - 背景：`TransformEngine#validateJslt` 注释就写着「供配置发布时做 JSLT
+    语法预校验」，但**全仓零调用者**。坏脚本能通过发布、上线，直到第一条
+    真实消息到达才以 `JSLT_ERROR` 进 DLQ。
+  - 改动：`ConfigValidator` 注入 `TransformEngine`（已核对无循环依赖）
+    并在 `validate()` 里调 `validateJslt`。编译失败报 `ERROR/field=jslt`；
+    其它 `RuntimeException` 降级 `WARN`（本类「宁漏不误」原则：不断言是
+    语法错误，但也不放行）。
+
+- **I3 部分唯一索引被误判**
+  - 背景：`INDEXES_SQL` 只筛 `indisprimary OR indisunique`，**没排除
+    `indpred IS NOT NULL`**。所以 `CREATE UNIQUE INDEX ... WHERE deleted = false`
+    会被当成普通唯一索引放行；而 MERGE 的 ON 条件不带该谓词，谓词外的行会
+    同时匹配 → SQLSTATE 21000 → 整块进二分隔离。
+  - 改动：SQL 多取 `is_partial`，结果分流到 `uniqueIndexes` /
+    `partialUniqueIndexes`；`TargetTableMeta` 增加该组件与
+    `hasPartialUniqueIndexOn`（保留 4 参构造兼容旧调用方）；
+    校验器对「只有部分索引」给出**指名道姓**的提示。
+  - 为什么不能只说「没有唯一索引」：用户明明建了索引，那样说他只会以为
+    索引没建成功，反复折腾。
+
+- **I4 schema / 表名拼进 SQL 文本**
+  - 背景：写入侧只 trim/lowercase（`table_name` 甚至只 trim），而这两个值
+    被**直接拼进 MERGE 的 SQL 文本**。`public;DROP` 能存进 `cfg_target`。
+    `IntrospectionService.requireIdentifying` 的注释早说明了这个位置的危险，
+    但它只覆盖探查入参，不覆盖落库路径。
+  - 改动：新增 `common/sql/Identifiers`（`^[A-Za-z_][A-Za-z0-9_$]*$`，≤63）；
+    `ConfigAdminService.requireTargetFields` 与 `MergeSqlBuilder.build`
+    双端调用。后者抛 `IllegalArgumentException` 而非 `ProcessingException`：
+    走到那里说明配置本不该存在（存量脏数据），不该被当成消息处理失败去重试。
+  - 错误信息不回显原值全文 —— 可能是精心构造的注入串，回显没有排障价值。
+
+- **I5 poolConfig 是裸 Object**
+  - 背景：拼错的键（`poolconfig` / `maxPoolSize`）能一路通过接口，直到运行期
+    `applyPoolConfig` 一句 warn 忽略。还顺带一个改不回去的死角：
+    `updateDatasource` 判断 `poolConfig != null` 才赋值，而空对象与「没配置」
+    等价 —— 用户没有办法把参数改回 Hikari 默认值。
+  - 改动：新增 `PoolConfig` record（字段全可空，compact 构造器做范围校验，
+    下限对齐 Hikari：connectionTimeout≥250ms、idleTimeout≥10s 或 0、
+    maxLifetime≥30s 或 0）；`PoolConfig.parse(Object)` 先自己查未知键并列出
+    可选键名，再走 Jackson 2 转 record；`toPoolJson` **只写用户显式给出的键**
+    （直接序列化 record 会把 null 也写出来，运行期再逐个
+    `parseInt("null")` warn 一遍）；传 `{}` 即清空。
+  - **DTO 里仍保持 Object 而不是声明成 PoolConfig**：Web 层是 Jackson 3，
+    声明强类型后未知键会在**反序列化阶段**失败，落到
+    `HttpMessageNotReadableException` 通用分支，提示只剩一句
+    「请求体不是合法 JSON」—— 对「键名拼错」毫无帮助。这一版是先写成强类型
+    再退回来的。
+  - `applyPoolConfig` 原样保留，作为存量脏数据的最后一道防线。
+
+- **I6 `updateTimeField` 把错误拖到 publish**
+  - 背景：缺省成 `update_time`，目标表没有该列时**创建静默成功**，
+    几十分钟后 publish 才报错，中间用户以为配好了。Upsert Key 拼错同理。
+  - 改动：新增 `requireUsableTargetTable`，`createTarget`/`updateTarget`
+    都调用，读一次 `metadataReader.get`（有缓存）并**列出可用列名**
+    （只报「列不存在」用户得自己去查表结构，往往来回好几次）。
+  - 读不到表结构时**不报错**（log.debug 后放过）：目标库可能暂时连不上，
+    那不属于「用户填错了」，拦下来只会让人卡在创建这一步。
+
+- **I7 状态列无 CHECK**（已在 V2 迁移内交付，见上一条记录）。
+
+- **I8 Flyway baseline-on-migrate**
+  - 背景：`baseline-on-migrate: true`。指向「有表但没有
+    `flyway_schema_history`」的库时，Flyway 把现状 baseline 成 V1 而
+    **不执行** V1__init_schema.sql —— 与 AGENTS.md 记的「Flyway 静默不建表」
+    同一类失败。
+  - 改动：新增 `application-prod.yml.example`（`.example` 后缀不参与默认启动），
+    `baseline-on-migrate: false` + `baseline-version: 0`；主配置保留 true
+    并补注释说明生产请用样例。
+  - **被测试纠正的判断**：第一版测试固定 `baselineVersion("0")`，
+    结果 V1 照常执行、断言失败。原因是 Flyway 在 baseline 时把现状记成
+    该版本号，**只执行比它新的迁移**，默认值是 1 —— 默认配置下 V1 恰好在
+    被跳过的那一侧。改成不设（=1）才复现出跳过；`0` 则作为双保险保留在样例里
+    （万一有人误开 baseline，V1 仍会执行），并单独写了一条用例钉住这个差异。
+
+- **影响与回滚**
+  - I1/I4/I6 **会让以前能保存的配置被拒**（超长名称、带引号/空格的标识符、
+    不存在的 update_time 列）—— 这正是目的，需在使用说明里提示。
+  - I3 **会让某些「以前能发布」的配置失败**：只建了部分唯一索引的那些。
+    它们本来就该在运行期炸，现在提前到发布。
+  - I5 会拒绝拼错键名的存量配置（那些键本来也没生效，改正后行为只更符合预期）。
+  - I8 只动配置样例，不改默认值，本地开发流程不受影响。
+  - 全部不触及 ACK 与 MERGE 写入链路，§6 红线不受影响。
+  - 回滚：I1 去掉注解与 `@Valid`；I2 删掉 `validateJslt` 调用；
+    I3 恢复 `INDEXES_SQL` 与 `hasUniqueIndexOn`；I4 删掉两处 `Identifiers` 调用；
+    I5 恢复 `JsonNodes.toJsonNode(req.poolConfig())`；I6 删掉
+    `requireUsableTargetTable` 调用；I8 删除样例文件。
+
+- **验证汇总**：`mvn test` 94 passed（H 收尾 83 → I 新增 11：
+  IdentifiersTest 3、FlywayBaselineTest 2、GlobalExceptionHandlerTest 增 1、
+  ConfigAdminTest 增 5）。`pnpm build` 未受 I 的影响（无前端改动）。
+
+---
+
 ## 2026-10-21 · 里程碑 H 全部交付（H1–H7 可观测性与自愈）
 
 七条的共同主题是「注释/接口承诺了某种兜底，但兜底其实不存在」。
