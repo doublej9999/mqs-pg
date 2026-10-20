@@ -14,8 +14,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 消息体 → 目标行的转换（tech-design §8）。
@@ -37,8 +37,41 @@ public class TransformEngine {
     private final TypeConverter typeConverter;
     private final ExpressionEvaluator expressionEvaluator;
 
-    /** JSLT 编译缓存：编译开销远大于执行，配置版本数有限，无需淘汰。 */
-    private final Map<String, Expression> jsltCache = new ConcurrentHashMap<>();
+    /**
+     * JSLT 编译缓存（J7）：编译开销远大于执行，命中即免去整段解析。
+     *
+     * <p><b>为什么必须有上限</b>：key 是脚本全文。原实现注释写着「配置版本数有限，
+     * 无需淘汰」—— 这话只在「每个版本都发布上线」时成立。而草稿校验
+     * （{@code ConfigValidator#validateJslt}）也会走这里，于是**每改一次草稿的
+     * jslt 就新增一项**，一个下午的调脚本就能攒出成百上千条永不释放的编译产物。
+     *
+     * <p>用手写 LRU（{@code LinkedHashMap} + {@code removeEldestEntry}）而不是
+     * Caffeine：这里只有一处用法、一个上限数字，为它引入新依赖不划算。
+     * 并发上直接 {@code synchronized} —— 命中是一次 O(1) 查找，而未命中的代价是
+     * 编译一整段脚本，锁的竞争完全淹没在设计本就昂贵的路径里。
+     */
+    private static final int JSLT_CACHE_LIMIT = 512;
+
+    /** 缓存上限，供测试与诊断读取。 */
+    public static int jsltCacheLimit() {
+        return JSLT_CACHE_LIMIT;
+    }
+
+    private final Map<String, Expression> jsltCache = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Expression> eldest) {
+            return size() > JSLT_CACHE_LIMIT;
+        }
+    };
+
+    /** 当前缓存条数，供诊断/测试。 */
+    public synchronized int jsltCacheSize() {
+        return jsltCache.size();
+    }
+
+    private synchronized Expression compileJslt(String script) {
+        return jsltCache.computeIfAbsent(script, Parser::compileString);
+    }
 
     /**
      * @param config 消息接收时刻绑定的配置快照
@@ -94,7 +127,7 @@ public class TransformEngine {
     private JsonNode applyJslt(String script, JsonNode input) {
         Expression compiled;
         try {
-            compiled = jsltCache.computeIfAbsent(script, Parser::compileString);
+            compiled = compileJslt(script);
         } catch (RuntimeException e) {
             throw new ProcessingException(ErrorCode.JSLT_ERROR, "JSLT 脚本无法编译: " + abbreviate(e.getMessage()), e);
         }
@@ -142,7 +175,7 @@ public class TransformEngine {
             return;
         }
         try {
-            jsltCache.computeIfAbsent(script, Parser::compileString);
+            compileJslt(script);
         } catch (RuntimeException e) {
             throw new ProcessingException(ErrorCode.JSLT_ERROR, "JSLT 脚本无法编译: " + e.getMessage(), e);
         }
