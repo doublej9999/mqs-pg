@@ -166,7 +166,10 @@ public class ConsoleController {
             @RequestParam(defaultValue = "50") int limit) {
 
         int size = Math.max(1, Math.min(limit, 200));
-        int offset = Math.max(0, page - 1) * size;
+        // 用 long 计算（J6）：page=Integer.MAX_VALUE 时 (page-1)*size 会整数溢出为负数，
+        // 拼进 SQL 的 OFFSET 变成负数 -> PG 报错 -> 500。这里先按 long 算，再夹到 int 范围。
+        long offset = (long) Math.max(0, page - 1) * size;
+        int safeOffset = offset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) offset;
 
         LambdaQueryWrapper<RtErrorRecord> countQuery = new LambdaQueryWrapper<RtErrorRecord>()
                 .eq(isFinal != null, RtErrorRecord::getFinalFlag, isFinal)
@@ -181,7 +184,7 @@ public class ConsoleController {
                         .eq(errorStage != null && !errorStage.isBlank(), RtErrorRecord::getErrorStage, errorStage)
                         .eq(messageId != null && !messageId.isBlank(), RtErrorRecord::getMessageId, messageId)
                         .orderByDesc(RtErrorRecord::getId)
-                        .last("LIMIT " + size + " OFFSET " + offset));
+                        .last("LIMIT " + size + " OFFSET " + safeOffset));
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("total", total == null ? 0 : total);
@@ -198,7 +201,10 @@ public class ConsoleController {
             @RequestParam(defaultValue = "50") int limit) {
 
         int size = Math.max(1, Math.min(limit, 200));
-        int offset = Math.max(0, page - 1) * size;
+        // 用 long 计算（J6）：page=Integer.MAX_VALUE 时 (page-1)*size 会整数溢出为负数，
+        // 拼进 SQL 的 OFFSET 变成负数 -> PG 报错 -> 500。这里先按 long 算，再夹到 int 范围。
+        long offset = (long) Math.max(0, page - 1) * size;
+        int safeOffset = offset > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) offset;
 
         StringBuilder where = new StringBuilder(" WHERE 1 = 1");
         List<Object> args = new java.util.ArrayList<>();
@@ -216,7 +222,7 @@ public class ConsoleController {
 
         List<Object> pageArgs = new java.util.ArrayList<>(args);
         pageArgs.add(size);
-        pageArgs.add(offset);
+        pageArgs.add(safeOffset);
         List<Map<String, Object>> items = jdbc.queryForList(
                 "SELECT id, message_id, route_id, topic, tag, receive_time, config_version, "
                         + "payload::text AS payload, payload_raw "
