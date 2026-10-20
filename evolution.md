@@ -7,6 +7,107 @@
 ---
 
 #
+## 2026-10-21 · 里程碑 J 全部交付（J1–J7 重试与写入热路径）
+
+主题是「积压与热路径上的放大效应」：重试逐条写、租约覆盖不住整批、
+MERGE 文本每块重拼、热路径逐行分配。逐条记录，含三次被测试纠正的判断错误。
+
+- **J2 租约覆盖不住整批**（先做，因为 J1 会放大它）
+  - 背景：领取时给**整批**打同一个 5 分钟租约，然后顺序处理 200 条。目标库慢时
+    （每条一个 5s 连接超时）200 条最坏 1000s ≫ 300s，`reclaimExpiredLeases`
+    会把**仍在处理**的任务放回 PENDING —— 同一任务被重复重放。
+    `uk_retry_active` 只约束 PENDING/RUNNING 并存，防不了重放。
+  - 改动：两道防线。① 初始租约 `max(leaseDuration, batchSize × estimatedPerTask)`，
+    新增 `estimated-per-task`（默认 2s）；② 真正的兜底是 `renewLease`：
+    每 `renew-lease-every`（默认 20）条续租一次。
+  - **续租 SQL 必须带 `status='RUNNING'`**：先处理完的任务已是 SUCCESS/PENDING，
+    不带这个条件会把它们连同租约一起「复活」。受影响的正是这一条 ——
+    返回行数与传入 id 数不符即说明有任务被回收，**立即停止本轮**。
+
+- **J1 重试逐条写**
+  - 背景：每条任务单独 `writer.write(cfg, List.of(one))`，积压 200 条就是
+    200 次 MERGE、200 次拼文本、200 次往返。积压本身就是异常态，重试路径把它放大得最厉害。
+  - 改动：`RetryReplayer#prepareGroup` 读一次绑定版本配置 → 逐条 transform →
+    `BatchFolder#foldRows` → `PreparedGroup`；`RetryScheduler#processBatch`
+    按 `(routeId, configVersion)` 分组，**组间顺序**执行（目标库连接池只有 4–10 条，
+    并发会和正常消费抢连接，把一次积压放大成全场抖动），每组一次 `write`，
+    再用 `MergeResult` 逐条映射结论。
+  - 单条与批量**共用 `applyOutcome`**：这套状态机有四处易错分叉
+    （CONFIG_MISSING/PG_FAILURE 不消耗次数、CONFIG_GONE 有限轮缓冲、attempt 独立推进），
+    两份拷贝一旦漂移就会出现「单条重试进 DLQ、批量重试不进」这种只在积压时暴露的不一致。
+  - 新增 `CandidateRow` + `foldRows`：重放路径消息早已 ACK，**不能**构造
+    `CandidateRecord`（它要求 `MqsMessage` 才能生成 `MessageRef`），否则
+    `FoldedRecord.sources()` 非空，而重放路径恰恰依赖它为空。两条折叠路径共用
+    同一个 `compareUpdateTime` —— 规则漂移会让同一条消息在实时与重试路径得到不同的胜出者。
+  - 分组键用 record 而不是拼字符串：后者加第三个维度时很容易只改一处而静默串组。
+
+- **J3 每块重拼 MERGE 文本**
+  - 背景：`USING (VALUES (?,?),(?,?),...)` 按行数生成，行数一变文本就变；
+    PG 侧每个新文本都是一份新的解析/规划（pgjdbc 缓存按文本命中，行数一变就 miss）。
+  - 改动：拆成「渲染」与「绑定」。`render` 只依赖 (表, 列, Upsert Key, 守卫字段,
+    列类型, 行数)，结果进 `ConcurrentHashMap<SqlKey, String>`；参数按块另绑。
+    key 用 record 而不是拼串：**少一个要素就会产生错误的 SQL**，而错误 SQL 的症状
+    （列不存在、类型不匹配）离根因很远。类型串也进 key —— `?::numeric` 本就是文本的一部分。
+    上限 256，满了整体清空而不做 LRU（表结构变更会产生新 key，无上限就是泄漏；
+    「几种行数 × 几张表」远小于上限，清空代价可忽略，换来不必为线程安全写更复杂的结构）。
+    新增 gauge `mqspg.write.sql.cache.size`。
+  - **被测试纠正**：第一版用例断言「写一次单行批次后缓存条目数变大」，失败 ——
+    单行文本早已被其它用例写进同一个 Spring 单例缓存。改成「先跑到基线，再验证
+    重复写入不增长」，语义反而更贴近真正关心的东西（命中率）。
+
+- **J4 热路径逐行分配**
+  - 改动：`KeyTuple#ofNormalized(Object[])`（先规整再 `Arrays.asList` →
+    `List.copyOf` 正好一次拷贝）；列标签 `__keyN` 按块算一次，块内所有行共用。
+  - **被测试纠正（20 条全红）**：把 `jdbc.query` 第三个参数从
+    `compiled.params().toArray()` 改成 `compiled.params()`，以为能省一次数组转换。
+    PG 报 SQLSTATE 07006。原因是 `JdbcTemplate.query(String, ResultSetExtractor, List)`
+    与 `(String, ResultSetExtractor, Object...)` 是**两个语义不同的重载**：
+    后者把数组展开成 N 个绑定参数，前者把整个 List 当**一个**参数绑上去。
+    最终改回数组（封装成 `CompiledMerge#paramsArray()` 并把这个坑写进注释）。
+    本条真正省下的是「每行一个 ArrayList + 每行拼标签」，数组转换那处保留原样。
+
+- **J7 JSLT 编译缓存无上限**
+  - 背景：`jsltCache` 是「不淘汰」的 ConcurrentHashMap，注释理由是「配置版本数有限」。
+    这话只在「每个版本都发布上线」时成立 —— 而草稿校验 `validateJslt` 也走这个缓存，
+    **每改一次草稿就新增一项**，一下午调脚本就能攒出上千条永不释放的编译产物。
+  - 改动：手写 LRU（`LinkedHashMap(accessOrder=true)` + `removeEldestEntry`，上限 512）。
+    不引入 Caffeine：只有一处用法、一个上限数字。并发上直接 `synchronized` ——
+    命中是 O(1) 查找，未命中是编译一整段脚本，锁竞争完全淹没在昂贵的路径里。
+    抽出 `compileJslt` 让 `applyJslt` 与 `validateJslt` 共用一处缓存入口。
+
+- **J5 列表接口无分页 / 内存排序**
+  - 背景：`getRoute` 每次都把全部版本读进内存再 `sort`；版本数到几百后详情页明显变慢。
+  - 改动：`listVersions(routeId, limit)` 把 `ORDER BY version DESC` 下推到 SQL 并
+    追加 `LIMIT`；`listVersions(routeId)` 委托给 `RECENT_VERSIONS = 50`（改为 public）。
+    刻意**不**返回版本总数：详情页只要「最近改过什么」，多一次 `count(*)` 让每次刷新
+    都多一趟往返，换来的信息没人用。
+  - 索引事实按查证结果写：`cfg_version` 有 `UNIQUE (route_id, version)`，
+    「过滤 + 倒序 + LIMIT」可走索引倒序扫描。第一版注释凭印象说「没有索引」，已纠正。
+  - **被测试纠正三次**：① `admin.createVersion` 造第二个版本就报「已有草稿版本」——
+    `uk_version_draft (route_id) WHERE status='DRAFT'` 兜着，每路由至多一个草稿；
+    ② 改用 SQL 插行，先用 DRAFT 仍撞 `uk_version_draft`（route_id 唯一），必须用 PUBLISHED；
+    ③ 版本号固定从 1000 起仍撞唯一键，得从 `MAX(version)` 之后才开始。
+
+- **J6 分页 offset 溢出**
+  - 两处 `int offset = Math.max(0, page - 1) * size` 在 `page = Integer.MAX_VALUE`
+    时溢出为负 → PG 报错 → 500。改为 long 计算 + 夹到 int 范围。
+  - 索引那半（`idx_error_final_id`、`idx_error_stage_id`）已在 V2 先行交付。
+    keyset 分页按计划「放后」，未做。
+
+- **影响与回滚**
+  - J1 改变了重试路径的写入批次形状，但**每条任务的 attempt / DLQ 语义不变**
+    （有 12 条 `RetrySchedulerTest` 覆盖，含原有 10 条逐条路径）。
+  - J2 新增两个配置项，默认值即可用；`renew-lease-every=0` 可退回「只靠初始租约」。
+  - J3 的缓存对语义完全透明，出问题时清空缓存或把上限设为 0 都不影响正确性。
+  - J5 **会让详情页只显示最近 50 个版本** —— 前端版本抽屉需要配合「加载更多」，
+    属于 K5 的范围；`listVersions(routeId, 0)` 仍可取全量。
+  - 全部不触及 ACK 与 MERGE 的单调守卫（§6 红线），`WHEN MATCHED` 逐字未动。
+
+- **验证汇总**：`mvn test` 101 passed（I 收尾 94 → J 新增 7：
+  RetrySchedulerTest +3、PgWriterTest +1、JsltCacheTest +2、ConfigAdminTest +1）。
+
+---
+
 ## 2026-10-21 · 里程碑 I 全部交付（I1–I8 校验前置）
 
 主题是「校验本该在保存/发布时就拦下，却全都推迟到运行期」。
