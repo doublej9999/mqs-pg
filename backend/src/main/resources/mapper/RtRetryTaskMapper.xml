@@ -87,5 +87,19 @@
             updated_at    = EXCLUDED.updated_at
         RETURNING id
     </select>
-
+    <!--
+      续租（J2）。
+      只动 status='RUNNING' 的行：先处理完的任务已经是 SUCCESS 或 PENDING，
+      不带这个条件就会把它们连同租约一起「复活」。
+    -->
+    <update id="renewLease">
+        UPDATE rt_retry_task
+        SET lease_until = now() + make_interval(secs =&gt; #{leaseSeconds}),
+            updated_at  = now()
+        WHERE status = 'RUNNING'
+          AND id IN
+          <foreach collection="ids" item="id" open="(" separator="," close=")">
+              #{id}
+          </foreach>
+    </update>
 </mapper>

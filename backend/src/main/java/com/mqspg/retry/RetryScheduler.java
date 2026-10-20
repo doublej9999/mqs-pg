@@ -47,19 +47,75 @@ public class RetryScheduler {
                 log.warn("回收了 {} 个租约过期的重试任务", reclaimed);
             }
 
-            List<RtRetryTask> due = retryTaskMapper.claimDue(
-                    props.getBatchSize(), Math.max(1, props.getLeaseDuration().toSeconds()));
+            long leaseSeconds = leaseSecondsFor(props.getBatchSize());
+            List<RtRetryTask> due = retryTaskMapper.claimDue(props.getBatchSize(), leaseSeconds);
             if (due == null || due.isEmpty()) {
                 return;
             }
 
-            log.info("领取到 {} 个待重试任务", due.size());
-            for (RtRetryTask task : due) {
-                processOne(task);
-            }
+            log.info("领取到 {} 个待重试任务（租约 {}s）", due.size(), leaseSeconds);
+            processBatch(due, leaseSeconds);
         } catch (RuntimeException e) {
             // 调度器不能因为一轮异常就停摆
             log.error("重试调度轮次失败", e);
+        }
+    }
+
+    /**
+     * 整批租约 = max(配置的租约, 批大小 × 单条预估耗时)。
+     *
+     * <p>原来固定用 {@code leaseDuration}（5 分钟）覆盖整批 200 条，而处理是顺序的：
+     * 目标库慢的时候（每条一个 5s 连接超时）200 条最坏 1000s ≫ 300s，
+     * {@code reclaimExpiredLeases} 会把**仍在处理**的任务放回 PENDING，
+     * 同一任务被重复重放。{@code uk_retry_active} 只防 PENDING/RUNNING 并存，防不了重放。
+     *
+     * <p>这只是一个「预估」的下限，真正的兜底是 {@link #renewLease}。
+     */
+    private long leaseSecondsFor(int batchSize) {
+        long base = Math.max(1, props.getLeaseDuration().toSeconds());
+        long estimate = (long) batchSize * Math.max(1, props.getEstimatedPerTask().toSeconds());
+        return Math.max(base, estimate);
+    }
+
+    /**
+     * 逐条处理，并周期性续租。
+     *
+     * <p>批量大小 200 + 初始租约 5 分钟的组合下，只要目标库慢一点，
+     * 后半段的任务就会在「租约已过期」的状态下被处理 —— 别的实例（或下一轮
+     * 自己的 {@code reclaimExpiredLeases}）已经把它们的副本领走了，
+     * 于是同一条消息被写两次。续租把这种情形收敛掉。
+     *
+     * <p>续租失败（受影响行数与预期不符）说明有人已经抢走，**立即停止本轮**：
+     * 继续处理只会制造更多重复重放，剩下的任务留给下一轮。
+     */
+    private void processBatch(List<RtRetryTask> due, long leaseSeconds) {
+        int renewEvery = Math.max(0, props.getRenewLeaseEvery());
+        for (int i = 0; i < due.size(); i++) {
+            if (renewEvery > 0 && i > 0 && i % renewEvery == 0
+                    && !renewLease(due.subList(i, due.size()), leaseSeconds)) {
+                log.warn("续租失败，提前结束本轮: 已处理 {}/{}，剩余任务留给下一轮",
+                        i, due.size());
+                return;
+            }
+            processOne(due.get(i));
+        }
+    }
+
+    /** @return true 表示整批仍归本实例所有 */
+    private boolean renewLease(List<RtRetryTask> remaining, long leaseSeconds) {
+        List<Long> ids = remaining.stream().map(RtRetryTask::getId).toList();
+        try {
+            int renewed = retryTaskMapper.renewLease(ids, leaseSeconds);
+            if (renewed != ids.size()) {
+                log.warn("续租只成功 {} / {} 行，说明有任务已被回收", renewed, ids.size());
+                return false;
+            }
+            return true;
+        } catch (RuntimeException e) {
+            // 连不上库时不要继续处理：此时审计与状态回写也会失败，
+            // 继续跑只会让「处理了一半」的任务看起来仍在推进
+            log.warn("续租抛异常，提前结束本轮: {}", e.getMessage());
+            return false;
         }
     }
 

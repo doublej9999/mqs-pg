@@ -37,6 +37,28 @@ public class RetryProperties {
     private Duration leaseDuration = Duration.ofMinutes(5);
 
     /**
+     * 单条任务的最坏预估耗时（J2）。用于按批大小放大初始租约。
+     *
+     * <p>领取时一次给整批打同一个租约，然后顺序处理 batchSize 条。
+     * 若目标库慢，200 条 × 每条一个连接超时（默认 5s）远超 5 分钟租约，
+     * {@code reclaimExpiredLeases} 会把**仍在处理**的任务重新放回 PENDING，
+     * 同一任务被重复重放（{@code uk_retry_active} 只防并存，不防重放）。
+     *
+     * <p>默认 2s：比正常单条（毫秒级）宽松得多，比连接超时小，
+     * 用来把「批很大」这件事折算进租约。
+     */
+    private Duration estimatedPerTask = Duration.ofSeconds(2);
+
+    /**
+     * 每处理多少条续租一次（J2）。0 表示不续租，仅靠初始租约。
+     *
+     * <p>续租才是真正的兜底：初始租约只能按「预估」放大，而实际耗时无法预估。
+     * 续租失败（返回行数不符）即停止本轮，把剩余任务留给下一轮，
+     * 避免在租约已失的情况下继续处理、与其他实例重复重放。
+     */
+    private int renewLeaseEvery = 20;
+
+    /**
      * 绑定配置**永久**缺失时允许缓冲的轮数，超过即进 DLQ。
      *
      * <p>为什么需要这个上限：重试任务按**任务绑定的版本**取配置，

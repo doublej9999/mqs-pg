@@ -41,4 +41,19 @@ public interface RtRetryTaskMapper extends BaseMapper<RtRetryTask> {
      * @return 被回收的任务数
      */
     int reclaimExpiredLeases();
+    /**
+     * 续租（J2）：把仍处于 {@code RUNNING} 的任务租约往后推。
+     *
+     * <p><b>必须带 {@code status = 'RUNNING'} 条件</b>：领取时整批打同一个租约，
+     * 而处理是逐条的 —— 先处理完的已经是 SUCCESS/PENDING，若不带这个条件，
+     * 续租会把它们连同租约一起「复活」成看似仍在处理的行。
+     *
+     * <p>返回受影响行数：与传入 id 数不符说明有任务已不在 RUNNING
+     * （被别人回收了），调用方据此停止本轮，避免重复重放。
+     *
+     * @param ids          本轮领取到的任务 id
+     * @param leaseSeconds 新租约时长（秒）
+     * @return 实际续租成功的行数
+     */
+    int renewLease(@Param("ids") List<Long> ids, @Param("leaseSeconds") long leaseSeconds);
 }

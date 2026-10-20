@@ -237,6 +237,35 @@ class RetrySchedulerTest extends AbstractPgIntegrationTest {
         assertTrue(!after.getNextRetryAt().isAfter(OffsetDateTime.now().plusSeconds(1)));
     }
 
+    /**
+     * J2：续租只认 {@code status='RUNNING'}。
+     *
+     * <p>领取时整批打同一个租约，处理是逐条的 —— 已处理完的已经是
+     * SUCCEEDED / PENDING。若续租不带状态条件，会给这些行重新写回租约，
+     * 让它们看起来仍在处理中。
+     */
+    @Test
+    @DisplayName("续租只作用于 RUNNING，已完成的任务不会被复活")
+    void renewLeaseOnlyTouchesRunning() {
+        RtRetryTask running = insert("rtt-renew-1", "{}", 0, 10, 1);
+        RtRetryTask done = insert("rtt-renew-2", "{}", 0, 10, 1);
+        jdbc.update("UPDATE mqs_pg.rt_retry_task SET status = 'SUCCEEDED', lease_until = NULL WHERE id = ?",
+                done.getId());
+        jdbc.update("UPDATE mqs_pg.rt_retry_task SET lease_until = now() - interval '1 hour' WHERE id = ?",
+                running.getId());
+
+        int renewed = retryTaskMapper.renewLease(
+                List.of(running.getId(), done.getId()), 600L);
+
+        assertEquals(1, renewed, "只有 RUNNING 那一行应被续租");
+        // 受影响行数和传入 id 数不符，调用方据此判定「有人抢走了」并停止本轮
+        OffsetDateTime lease = jdbc.queryForObject(
+                "SELECT lease_until FROM mqs_pg.rt_retry_task WHERE id = ?",
+                OffsetDateTime.class, running.getId());
+        assertTrue(lease.isAfter(OffsetDateTime.now().plusMinutes(5)),
+                "租约应被推到约 10 分钟后，实际 " + lease);
+    }
+
     // ------------------------------------------------------------------
     // 辅助
     // ------------------------------------------------------------------
