@@ -2,6 +2,7 @@ package com.mqspg.writer.sql;
 
 import com.mqspg.common.model.TargetRef;
 import com.mqspg.common.model.TargetRow;
+import com.mqspg.common.sql.Identifiers;
 import com.mqspg.writer.fold.FoldedRecord;
 import com.mqspg.writer.metadata.TargetTableMeta;
 import org.springframework.stereotype.Component;
@@ -29,6 +30,20 @@ public class MergeSqlBuilder {
 
         if (chunk.isEmpty()) {
             throw new IllegalArgumentException("chunk 不能为空");
+        }
+
+        // 防守式标识符校验。
+        //
+        // schema / table 会被**直接拼进下面的 SQL 文本**（`MERGE INTO %s.%s`），
+        // 不是参数绑定。写入侧（createTarget/updateTarget）已经挡了一道，这里再挡一道：
+        // 存量数据可能是校验加上之前就落库的脏值，而这条 SQL 一旦被污染，
+        // 影响的是整个写入链路，不是一次请求。
+        //
+        // 用 IllegalArgumentException 而不是 ProcessingException：走到这里说明
+        // 配置已经不该存在了，属于编程/数据契约错误，不该被当成「消息处理失败」重试。
+        if (!Identifiers.isValid(target.schema()) || !Identifiers.isValid(target.table())) {
+            throw new IllegalArgumentException(
+                    "目标表标识符非法（只允许字母、数字、下划线、$）: " + target.qualifiedTable());
         }
 
         TargetRow sample = chunk.get(0).winnerRow();

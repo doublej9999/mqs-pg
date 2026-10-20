@@ -7,6 +7,7 @@ import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.common.model.TargetRef;
 import com.mqspg.common.persistence.JsonNodes;
+import com.mqspg.common.sql.Identifiers;
 import com.mqspg.config.dto.DatasourceDto;
 import com.mqspg.config.dto.DatasourceRequest;
 import com.mqspg.config.dto.DraftDto;
@@ -884,6 +885,10 @@ public class ConfigAdminService {
         if (isBlank(req.tableName())) {
             throw new ProcessingException(ErrorCode.INVALID_INPUT, "表名不能为空");
         }
+        // schema / table 会被直接拼进 MERGE 的 SQL 文本（不是参数绑定），
+        // 必须在这里挡住。规范化（trim + lowercase）只解决大小写，不解决注入。
+        Identifiers.requireValid(req.schemaName(), "schema");
+        Identifiers.requireValid(req.tableName(), "表名");
     }
 
     private void requireRouteFields(RouteRequest req) {

@@ -1,5 +1,6 @@
 package com.mqspg.config;
 
+import com.mqspg.common.error.ErrorCode;
 import com.mqspg.common.error.ProcessingException;
 import com.mqspg.config.dto.ColumnDto;
 import com.mqspg.config.dto.DatasourceDto;
@@ -294,6 +295,34 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         admin.deleteRoute(route.id(), true);
         admin.deleteTarget(target.id());
         admin.deleteDatasource(ds.id());
+    }
+
+    @Test
+    @DisplayName("schema / 表名含注入字符时创建目标表被拒（I4）")
+    void rejectsUnsafeIdentifiers() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-inj", "123456"));
+        try {
+            // schema / table 会被直接拼进 MERGE 的 SQL 文本，不是参数绑定。
+            // 规范化（trim + lowercase）只解决大小写，不解决注入。
+            for (String[] pair : List.of(
+                    new String[]{"public;DROP", TABLE},
+                    new String[]{SCHEMA, "orders; DROP TABLE biz_demo.orders"},
+                    new String[]{SCHEMA, "my table"},
+                    new String[]{SCHEMA, "a'b"})) {
+                ProcessingException e = assertThrows(ProcessingException.class,
+                        () -> admin.createTarget(new TargetRequest(
+                                PREFIX + "tgt-inj", ds.id(), pair[0], pair[1],
+                                List.of("id"), "update_time")),
+                        () -> "应拒绝 schema=%s table=%s".formatted(pair[0], pair[1]));
+                assertEquals(ErrorCode.INVALID_INPUT, e.getCode());
+            }
+
+            // 什么都没落库
+            assertEquals(0, jdbc.queryForObject(
+                    "SELECT count(*) FROM cfg_target WHERE name = ?", Integer.class, PREFIX + "tgt-inj"));
+        } finally {
+            admin.deleteDatasource(ds.id());
+        }
     }
 
     @Test
