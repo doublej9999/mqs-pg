@@ -208,29 +208,19 @@ public class ConfigService {
     }
 
     /**
-     * 确保存在运行状态行。
+     * 确保运行状态行存在，并把 {@code bind_version} 更新为最新激活的版本。
      *
-     * <p>读后写会撞并发：同一路由的两次激活可能都看到「不存在」然后各自 insert，
-     * 后者主键冲突。这里改成「先尝试按主键更新、无行可更新再插入」，
-     * 并把插入的冲突吞掉 —— 状态行的存在与否不影响激活本身的正确性，
-     * 不应因为这一行而让整个激活失败。
+     * <p><b>为什么是 upsert 而不是读后写</b>：`selectById` 判空再 `insert` 会撞并发 ——
+     * 同一路由的两次激活都可能看到「不存在」然后各自插入，后者主键冲突，
+     * 异常一路变成一句数据库原文。
+     *
+     * <p><b>为什么顺带更新 bind_version</b>：上一版只在首次插入时写它，
+     * 之后再激活新版本永远不动，字段名与内容长期不一致。
+     * 这里把它定为「最近一次状态变更时所处的 active 版本」——
+     * 注意**不是**「消息绑定版本」，那是重试任务上的 {@code config_version}。
      */
     public void ensureConsumerState(long routeId, int bindVersion) {
-        RtConsumerState existing = consumerStateMapper.selectById(routeId);
-        if (existing == null) {
-            RtConsumerState s = new RtConsumerState();
-            s.setRouteId(routeId);
-            s.setStatus("PAUSED");
-            s.setReason("等待 Consumer 启动");
-            s.setBindVersion(bindVersion);
-            s.setUpdatedAt(OffsetDateTime.now());
-            try {
-                consumerStateMapper.insert(s);
-            } catch (org.springframework.dao.DuplicateKeyException e) {
-                // 并发下另一个请求先插入了：以它为准，本次激活仍然成功
-                log.debug("消费状态行已被并发创建: route={}", routeId);
-            }
-        }
+        consumerStateMapper.upsertBindVersion(routeId, bindVersion);
     }
 
     // ------------------------------------------------------------------

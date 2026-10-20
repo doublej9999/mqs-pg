@@ -498,6 +498,37 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
     }
 
     @Test
+    @DisplayName("激活新版本会更新运行状态行的 bind_version")
+    void activateUpdatesBindVersion() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-bv", "123456"));
+        TargetDto target = admin.createTarget(targetRequest(PREFIX + "tgt-bv", ds.id()));
+        RouteSummaryDto route = admin.createRoute(
+                new RouteRequest(PREFIX + "route-bv", TOPIC + "bv", TAG, target.id()));
+
+        int v1 = admin.autoGenerateMappings(route.id()).version();
+        admin.publishVersion(route.id(), v1);
+        configService.activate(route.id(), v1);
+        assertEquals(v1, jdbc.queryForObject(
+                "SELECT bind_version FROM rt_consumer_state WHERE route_id = ?",
+                Integer.class, route.id()));
+
+        int v2 = admin.createVersion(route.id()).version();
+        admin.publishVersion(route.id(), v2);
+        configService.activate(route.id(), v2);
+
+        // 上一版只在首次插入时写 bind_version，之后再激活永远不动 ——
+        // 字段名与内容长期不一致，排查时会误导人
+        assertEquals(v2, jdbc.queryForObject(
+                "SELECT bind_version FROM rt_consumer_state WHERE route_id = ?",
+                Integer.class, route.id()),
+                "激活 v2 后 bind_version 必须跟着更新");
+
+        admin.deleteRoute(route.id(), true);
+        admin.deleteTarget(target.id());
+        admin.deleteDatasource(ds.id());
+    }
+
+    @Test
     @DisplayName("回滚会激活上一个已发布版本")
     void rollbackActivatesPreviousVersion() {
         DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds10", "123456"));

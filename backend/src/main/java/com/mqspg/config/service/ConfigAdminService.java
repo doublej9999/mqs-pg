@@ -498,8 +498,9 @@ public class ConfigAdminService {
                     "版本 %d 的状态已被并发修改，请刷新后重试".formatted(version));
         }
 
-        // 只有草稿版本在等发布，正好借这个时机把改动落进运行状态行
-        configService.ensureConsumerState(routeId, version);
+        // 刻意**不**在这里调 ensureConsumerState：发布只改变版本状态，
+        // 不改运行态。激活才决定「跑的是哪一版」，运行状态行由 activate 负责。
+        // 之前两边都调，等于让 publish 顺手改 bind_version，与实际在跑的版本对不上。
         log.info("版本已发布: route={} version={} 警告数={}", routeId, version,
                 result.issues().size());
         return result;
