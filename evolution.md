@@ -6,6 +6,130 @@
 
 ---
 
+## 2026-10-20 · K1 前端字段契约：补「本次启动以来」计数，枚举改由 /api/meta 下发
+
+- **背景**
+  - 仪表盘的「已接收 / 已 ACK / 未 ACK / 批次」四列一直渲染成空：后端
+    `/api/consumer/state` 只返回 `route_id` 与状态，前端却按 `receivedTotal` 等字段读取。
+    这类错位不会报错，只会让运维以为「跑了一整天，一条都没收到」。
+  - 错误页的 `stage` 下拉、各处状态色（`RUNNING`/`BACKOFF`/`STOPPED`…）都在前端硬编码，
+    后端加一个 `ErrorStage` 就得同步改前端；其中 `BACKOFF` 与 `STOPPED` 两个状态
+    **后端根本不存在**，永远不会命中，等于两个死分支。
+  - PG 健康卡只有 `true`/`false` 两态：请求被后端拒绝（比如配置库连不上）时也走 `false`，
+    页面显示「异常」，无法区分「探到了故障」和「压根没探成」。
+
+- **改动**
+  - `ConsoleController#consumerStates`：注入 `ConsumerManager`，对每条路由取活着的消费者，
+    补齐 `receivedTotal` / `ackedTotal` / `failedTotal` / `batchTotal` / `pauseReason`。
+    **没有在跑的消费者时这些字段返回 `null` 而不是 `0`** —— `0` 会被读成
+    「消费者在跑但没收到消息」，`null` 才能表达「本次启动以来没有这个消费者」，页面显示 `-`。
+    javadoc 里写明这是**内存计数、随进程重启归零**，不是历史累计。
+  - 新增 `MetaController`：`GET /api/meta/error-stages` 返回 `{stages, codeStages}`，
+    `GET /api/meta/statuses` 返回 `consumerStates` 与 `retryStatuses`，值全部取自
+    `ErrorStage` / `ErrorCode` / `ConsumerStateRepository` 的枚举常量，不再有第二份清单。
+  - 前端 `api/meta.js` 对应两个方法；`errors/index.vue` 的 `stages` 从 `ref([...])` 改成
+    启动时拉取，拉取失败退化为空列表（页面仍可用，不阻塞其它查询）。
+  - `dashboard/index.vue`：`pgHealthy` 改为三态（`null` = 未知），`pgHealth` computed 返回
+    `{type, label, detail}`，未知用 `info` 色；`stateTagType` 去掉两个不存在的状态，
+    改成 `RUNNING→success`、`PAUSED|RECOVERING→warning`、`ERROR→danger`、其余 `info`。
+    表格列改为 路由 ID / 状态 / 已接收 / 已 ACK / 未 ACK / 绑定版本 / 最近成功 / 最近错误 / 更新时间，
+    全部 `?? '-'`。页脚加一行说明，明确计数是内存值。
+  - `api/retry.js` 新增 `retrySummaryByState()`，**在 API 层**把 key 统一转小写：
+    原来页面各处 `summary.value.PENDING ?? summary.value.pending` 各写各的。
+  - `errors/index.vue` 增 `onFilterChange()`：筛选变化时重置 `page = 1` 再查，
+    否则在第 3 页上改筛选会看到空表。绑到两个下拉、回车与查询按钮。
+
+- **验证**
+  - `mvn test`：54 passed（K1 只动查询侧，未触及写入与 ACK 链路）。
+  - `pnpm build`：`✓ built`，exit 0。
+  - 手工：仪表盘三列有值；后端拒绝时健康卡显示「未知」（`info` 灰）而非「异常」。
+  - 未验证：真实 MQ 下的计数递增（本机只跑 mock broker，计数值靠集成测试的
+    `ConsumerManager` 状态断言间接覆盖）。
+
+- **影响与回滚**
+  - 只加字段与枚举接口，未改任何既有字段的名字或语义，前端旧代码不会被这次提交打断。
+  - `null` vs `0` 的取舍会让「消费者不存在」在页面上显示 `-`，
+    如果有下游脚本依赖这三个字段为数字，需要按 `null` 判空。
+  - 回滚：还原 `ConsoleController#consumerStates`、删除 `MetaController` 与 `api/meta.js`，
+    前端两个页面恢复硬编码 —— 无数据迁移。
+
+---
+
+## 2026-10-20 · K3 确认框取消不再抛未处理拒绝，错误码不再靠中文子串传递
+
+- **背景**
+  - 全仓 7 处 `await ElMessageBox.confirm(...)` 都是裸调。用户点「取消」时它以 reject
+    结束，而调用方都在 `async` 点击处理器里直接 `await` —— 每次取消都在控制台记一条
+    unhandled rejection，更麻烦的是「用户取消」与「真的失败」混进同一个 `catch`。
+  - 删除路由时若存在未完成的重试任务，后端拒绝并要求二次确认，而前端用
+    `String(e?.message).includes('重试任务')` 判断。后端那句提示文案一改
+    （`ConfigAdminService.deleteRoute`），「仍然删除」的流程就静默失效 —— 表现为点了没反应，
+    且没有任何报错。
+
+- **改动**
+  - 新增 `utils/confirm.js`：`confirmAction(message, title, options)` 内部吃掉取消，
+    明确返回 `true`/`false`，调用方只写 `if (!(await confirmAction(...))) return`。
+    `routes` / `retry` / `datasources` 三处共 7 个确认框改用它；顺带补上 `retry` 与
+    `datasources` 里原本缺失的失败 `catch`（原来请求失败会一路冒泡）。
+  - 新增 `ErrorCode.CONFLICT`（`ErrorSeverity.DATA`），`deleteRoute` 的前置检查改抛它。
+    **刻意不复用 `CONFIG_MISSING`**：那个码的严重度是 `FATAL`，
+    且已被几十处「路由不存在」「名称已存在」当万能入参错误用（见 H4），
+    再往里塞语义只会让后续按码映射状态码更乱。
+  - `api/request.js` 的失败分支把 `body.code` 与完整信封挂到 `error` 上
+    （HTTP 层失败同样挂），不再只抛一个裸 `Error`。
+  - `routes/index.vue` 的强制删除分支改判 `e?.code === 'CONFLICT'`。
+
+- **验证**
+  - `pnpm build` 通过；`mvn test` 54 passed（后端只多了一个枚举常量与一处抛码）。
+  - 手工：点「取消」后控制台无红字；删除有未完成重试任务的路由仍会弹「仍然删除」。
+
+- **影响与回滚**
+  - 前端错误对象多挂两个字段（`code` / `payload`），不影响既有 `message` 用法。
+  - 依赖 `message` 子串判断的写法在本仓已无残留（`grep 'includes(' ...` 确认）。
+  - 回滚：还原 `request.js` 与三处视图，`CONFLICT` 可留（未使用即无副作用）。
+
+---
+## 2026-10-20 · G1 并发激活留下两个 ACTIVE 版本（加行锁 + 条件更新）
+
+- **背景**
+  - `ConfigService.activate` 先读 `cfg_route.active_version` 当 `previous`，再降级 `previous`、
+    把目标版本置 `ACTIVE`、写回 `active_version`，全程没有行锁。
+  - 两个管理员同时点「激活」（或一个页面重试 + 一个手点）激活 v2 / v3 时，两边都读到
+    `previous=1`：各自把 v1 降级、各自把自己的版本置 ACTIVE。结果 `cfg_version` 里
+    **v2 与 v3 同时是 ACTIVE**，而 `cfg_route.active_version` 只保留后写者 ——
+    另一个成了 `deleteVersion` 的 ACTIVE 保护看不见的幽灵版本，可被直接删掉。
+
+- **改动**
+  - `CfgRouteMapper#selectByIdForUpdate`（`SELECT ... FOR UPDATE`）：`activate` 开头先锁路由行
+    再读版本。锁粒度是单条路由，不同路由的激活互不阻塞。
+  - 降级语句加 `status='ACTIVE'` 条件：兜住历史脏数据，只降级真正在 ACTIVE 的那一行，
+    不误伤已发布但从未激活的版本。
+  - 激活语句加 `status=<读到的状态>` 条件并校验影响行数；非 1 行抛
+    「版本状态已被并发修改，请刷新后重试」，而不是静默覆盖别人的状态。
+  - `rollback` 的同类窗口一并修掉：原来先 `selectList` 挑候选、再交给 `activate`，
+    两步之间候选可能被删或改状态，最终报「配置版本不存在」（看着像用户点错了版本）。
+    候选查询挪进同一把行锁内。
+  - `ensureConsumerState` 的读后写竞态：并发激活可能都读到「不存在」然后各自 insert，
+    后者主键冲突会把整个激活打挂。改为吞掉 `DuplicateKeyException` ——
+    状态行是否存在不影响激活本身的正确性。
+
+- **验证**
+  - 新增 `ConfigAdminTest.concurrentActivateKeepsSingleActive`：两线程同时激活 v2 / v3，
+    断言 `SELECT count(*) ... status='ACTIVE'` 恒为 1，且 `active_version` 指向的那行确实是 ACTIVE。
+    临时去掉 `FOR UPDATE` 该用例立刻变红（`expected: <1> but was: <2>`），确认它真的守着这个缺陷。
+  - 新增 `activateRejectsStatusChangedConcurrently`：版本在读取后被改动时报错而非静默激活。
+  - `mvn test`：54 passed（52 + 本次 2 条）。
+  - 注：用 `Copy-Item` 还原被临时改过的源文件后，Maven 增量编译会因 mtime 倒退继续用旧 class，
+    需要 `(Get-Item $p).LastWriteTime = Get-Date` 触发重编 —— 这次踩到了，写在这里备忘。
+
+- **影响与回滚**
+  - 加锁只影响写路径（激活 / 回滚），不触及 ACK 与 MERGE 写入链路，§6 的六条红线不受影响。
+  - 同一路由的并发激活从「都成功但状态错乱」变成「串行成功」，第二个请求可能拿到
+    「状态已被并发修改」提示 —— 这是预期的收敛行为。
+  - 回滚：去掉 `selectByIdForUpdate` 与两处 `eq(status)` 条件即可，无数据迁移。
+
+---
+
 ## 2026-10-20 · 第二轮优化方案（重写 docs/optimization-plan.md）
 
 - **背景**
