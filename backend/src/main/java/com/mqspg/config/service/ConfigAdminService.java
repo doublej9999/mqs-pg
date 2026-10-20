@@ -210,6 +210,10 @@ public class ConfigAdminService {
             throw new ProcessingException(ErrorCode.INVALID_INPUT,
                     "同一数据源下已存在该表定义: %s.%s".formatted(req.schemaName(), req.tableName()));
         }
+        String updateTimeField = defaultIfBlank(req.updateTimeField(), "update_time");
+        // 建的时候就校验一次，而不是等到 publish
+        requireUsableTargetTable(ds.getId(),
+                normalizeSchema(req.schemaName()), req.tableName().trim(), req.upsertKeys(), updateTimeField);
         OffsetDateTime now = OffsetDateTime.now();
         CfgTarget t = new CfgTarget();
         t.setName(req.name().trim());
@@ -217,7 +221,7 @@ public class ConfigAdminService {
         t.setSchemaName(normalizeSchema(req.schemaName()));
         t.setTableName(req.tableName().trim());
         t.setUpsertKeys(JsonNodes.toJsonNode(normalizeKeys(req.upsertKeys())));
-        t.setUpdateTimeField(defaultIfBlank(req.updateTimeField(), "update_time"));
+        t.setUpdateTimeField(updateTimeField);
         t.setCreatedAt(now);
         t.setUpdatedAt(now);
         targetMapper.insert(t);
@@ -240,6 +244,10 @@ public class ConfigAdminService {
                     "同一数据源下已存在该表定义: %s.%s".formatted(req.schemaName(), req.tableName()));
         }
         // upsertKeys 是 JsonNode，必须走实体上的 JsonbTypeHandler（见 saveDraft 的说明）
+        String updateTimeField = defaultIfBlank(req.updateTimeField(), "update_time");
+        // 改的时候同样校验：改表名/改守卫字段都可能指向一张不存在的列
+        requireUsableTargetTable(ds.getId(),
+                normalizeSchema(req.schemaName()), req.tableName().trim(), req.upsertKeys(), updateTimeField);
         CfgTarget patch = new CfgTarget();
         patch.setId(id);
         patch.setName(req.name().trim());
@@ -247,7 +255,7 @@ public class ConfigAdminService {
         patch.setSchemaName(normalizeSchema(req.schemaName()));
         patch.setTableName(req.tableName().trim());
         patch.setUpsertKeys(JsonNodes.toJsonNode(normalizeKeys(req.upsertKeys())));
-        patch.setUpdateTimeField(defaultIfBlank(req.updateTimeField(), "update_time"));
+        patch.setUpdateTimeField(updateTimeField);
         patch.setUpdatedAt(OffsetDateTime.now());
         targetMapper.updateById(patch);
 
@@ -998,6 +1006,57 @@ public class ConfigAdminService {
             node.put("maxLifetime", pool.maxLifetime());
         }
         return node;
+    }
+
+    /**
+     * 创建 / 修改目标表时立刻校验它的结构，把错误从 publish 提前到保存。
+     *
+     * <p><b>为什么</b>：原来 {@code updateTimeField} 缺省成 {@code update_time}，
+     * 目标表没有这一列时**创建静默成功**，直到几十分钟后执行 publish 才在
+     * {@code ConfigValidator} 里报错。中间这段时间用户以为配好了。
+     * 列名拼错同理 —— 表建得成功，发布才失败。
+     *
+     * <p>代价是创建时多一次元数据查询。可接受：{@code metadataReader.get} 自身有缓存，
+     * 而这条路径一天也就几次，不在热路径上。
+     *
+     * <p><b>读不到表结构时不报错</b>：目标库可能暂时连不上（网络、权限、库还没建）。
+     * 那种情况不属于「用户填错了」，拦下来只会让人卡在创建这一步；
+     * 真正的结构校验留给 publish —— 那里本来就有完整的检查。
+     */
+    private void requireUsableTargetTable(Long datasourceId, String schema, String table,
+                                          List<String> upsertKeys, String updateTimeField) {
+        TargetTableMeta meta;
+        try {
+            meta = metadataReader.get(new TargetRef(null, datasourceId, schema, table,
+                    normalizeKeys(upsertKeys), updateTimeField));
+        } catch (RuntimeException e) {
+            log.debug("创建目标表时读取结构失败，跳过前置校验（留给 publish）: {}.{} 原因={}",
+                    schema, table, e.getMessage());
+            return;
+        }
+
+        if (!meta.hasColumn(updateTimeField)) {
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
+                    "目标表 %s.%s 不存在单调守卫列 %s。可选列: %s".formatted(
+                            schema, table, updateTimeField, columnNames(meta)));
+        }
+        List<String> keys = normalizeKeys(upsertKeys);
+        List<String> missing = keys.stream().filter(k -> !meta.hasColumn(k)).toList();
+        if (!missing.isEmpty()) {
+            throw new ProcessingException(ErrorCode.INVALID_INPUT,
+                    "目标表 %s.%s 不存在 Upsert Key 列: %s。可选列: %s".formatted(
+                            schema, table, missing, columnNames(meta)));
+        }
+    }
+
+    /** 列出可用列名，用于报错提示 —— 只给列数没有排障价值。 */
+    private static String columnNames(TargetTableMeta meta) {
+        List<String> names = new ArrayList<>(meta.columns().keySet());
+        // 列太多时不刷屏
+        if (names.size() > 30) {
+            return String.join(", ", names.subList(0, 30)) + " 等 " + names.size() + " 列";
+        }
+        return String.join(", ", names);
     }
 
     private static String normalizeSchema(String schema) {

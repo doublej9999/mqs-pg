@@ -298,6 +298,41 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
     }
 
     @Test
+    @DisplayName("创建目标表时 updateTimeField 指向不存在的列，立即 400（I6）")
+    void createTargetRejectsMissingUpdateTimeField() {
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-utf", "123456"));
+        try {
+            // 原来：缺省的 update_time 列不存在时**创建静默成功**，
+            // 直到几十分钟后 publish 才报错，中间用户以为配好了
+            ProcessingException e = assertThrows(ProcessingException.class,
+                    () -> admin.createTarget(new TargetRequest(
+                            PREFIX + "tgt-utf", ds.id(), SCHEMA, TABLE,
+                            List.of("id"), "no_such_column")));
+            assertEquals(ErrorCode.INVALID_INPUT, e.getCode());
+            assertTrue(e.getMessage().contains("no_such_column"),
+                    "应指出是哪个列: " + e.getMessage());
+            // 列出可用列名 —— 只报「列不存在」没法让人一次改对
+            assertTrue(e.getMessage().contains("update_time"),
+                    "应列出可用列名: " + e.getMessage());
+
+            // Upsert Key 列不存在同样提前到创建时
+            ProcessingException keyErr = assertThrows(ProcessingException.class,
+                    () -> admin.createTarget(new TargetRequest(
+                            PREFIX + "tgt-utf", ds.id(), SCHEMA, TABLE,
+                            List.of("no_such_key"), "update_time")));
+            assertEquals(ErrorCode.INVALID_INPUT, keyErr.getCode());
+            assertTrue(keyErr.getMessage().contains("no_such_key"), keyErr.getMessage());
+
+            // 什么都没落库
+            assertEquals(0, jdbc.queryForObject(
+                    "SELECT count(*) FROM cfg_target WHERE name = ?",
+                    Integer.class, PREFIX + "tgt-utf"));
+        } finally {
+            admin.deleteDatasource(ds.id());
+        }
+    }
+
+    @Test
     @DisplayName("连接池参数：拼错的键报 400，{} 能清空回默认（I5）")
     void poolConfigValidatedAndClearable() {
         DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-pool", "123456"));
