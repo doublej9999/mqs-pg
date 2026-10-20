@@ -173,6 +173,56 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!--
+              代码格式检查（L1）。
+
+              只做 check、不做 apply：`mvn verify` 会因格式不合规而失败，
+              但**不会**在构建过程中偷偷改你的文件。自动改写源码是
+              「构建产物依赖构建执行过一次」的那类隐式副作用，
+              在 CI 上尤其危险（改完不提交，下次照样红）。
+
+              统一缩进/空格/import 顺序等纯格式问题，减少 diff 噪声。
+              规则刻意保持克制：palantir-java-format 会把每个参数的换行位置
+              都重排，一次性套到既有代码上会产生上万行 diff，
+              那正是 L1 提醒的「必须单独提交 + 先配 .git-blame-ignore-revs」。
+              这里只做**局部**的确定性修正（去尾随空格、统一换行、import 排序、
+              去掉未用 import），diff 可控。
+
+              发现格式问题时修一下：`mvn spotless:apply`，然后单独一次提交。
+            -->
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <version>2.44.2</version>
+                <configuration>
+                    <java>
+                        <includes>
+                            <include>src/main/java/**/*.java</include>
+                            <include>src/test/java/**/*.java</include>
+                        </includes>
+                        <removeUnusedImports/>
+                        <trimTrailingWhitespace/>
+                        <endWithNewline/>
+                        <indent>
+                            <tabs>false</tabs>
+                            <spaces>true</spaces>
+                            <spacesPerTab>4</spacesPerTab>
+                        </indent>
+                        <importOrder>
+                            <order>java,jakarta,javax,org,com,</order>
+                        </importOrder>
+                    </java>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotless-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

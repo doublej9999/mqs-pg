@@ -1,0 +1,11 @@
+# git blame 时跳过的提交（L1）
+#
+# 用法（每人配一次，或提交 .git/config 里的 blame.ignoreRevsFile）：
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub 会自动读取这个文件并在 blame 页面上提供「忽略此提交」的链接。
+#
+# 加进来的提交必须是**纯格式化**：只改空白 / import 顺序，不改语义。
+# 否则 blame 会跳过真正的逻辑变更，比噪声更糟。
+
+# L1：import 顺序、尾随空格、文件末尾换行（89 个文件）
+89e5f686b5f7df39d64e66ee2da03dbb6be3fc56
