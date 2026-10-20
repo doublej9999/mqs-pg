@@ -278,9 +278,21 @@ public class ConfigValidator {
         }
         // 唯一索引检查只在列都存在时做：否则会叠加一条无意义的报错
         if (allExist && !meta.hasUniqueIndexOn(keys)) {
-            issues.add(ValidationIssueDto.error("upsertKeys",
-                    "Upsert Key %s 上没有唯一索引或主键 —— MERGE 的 ON 条件依赖它保证一个目标行最多匹配一条源数据"
-                            .formatted(keys)));
+            // 区分「压根没有唯一索引」与「只有部分唯一索引」：
+            // 后者是本次新拦下的情况 —— 用户明明建了唯一索引，只告诉他
+            // 「没有唯一索引」会让他以为索引没建成功，从而反复折腾。
+            if (meta.hasPartialUniqueIndexOn(keys)) {
+                issues.add(ValidationIssueDto.error("upsertKeys",
+                        ("Upsert Key %s 上只有**部分**唯一索引（带 WHERE 谓词）—— "
+                                + "MERGE 的 ON 条件不带该谓词，谓词外的行会同时匹配，"
+                                + "运行期将报 cardinality violation 并让整批进二分隔离。"
+                                + "请改建不带 WHERE 的完整唯一索引，或改用主键。")
+                                .formatted(keys)));
+            } else {
+                issues.add(ValidationIssueDto.error("upsertKeys",
+                        "Upsert Key %s 上没有唯一索引或主键 —— MERGE 的 ON 条件依赖它保证一个目标行最多匹配一条源数据"
+                                .formatted(keys)));
+            }
         }
     }
 

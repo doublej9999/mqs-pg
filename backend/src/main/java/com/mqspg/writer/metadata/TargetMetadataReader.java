@@ -46,8 +46,23 @@ public class TargetMetadataReader {
             ORDER BY a.attnum
             """;
 
+    /**
+     * 读取唯一索引/主键的列集合。
+     *
+     * <p><b>{@code i.indpred IS NULL} 不能漏</b>：那是部分索引（{@code CREATE UNIQUE
+     * INDEX ... WHERE deleted = false}）。部分唯一索引**不构成 MERGE 的唯一性保证** ——
+     * MERGE 的 ON 条件不带那个谓词，一旦谓词外的行也存在，同一条源行可能匹配多行，
+     * PG 报 SQLSTATE 21000 cardinality violation，整批进二分隔离。
+     * 这正是发布校验该防的错误，而原来的 SQL 只筛 {@code indisprimary OR indisunique}，
+     * 会把部分索引当成普通唯一索引放行。
+     *
+     * <p>但也不能「看不见」它：用户建了部分唯一索引却不知道为什么发布不通过，
+     * 只会更困惑。所以这里把部分索引单独捞出来（{@code indpred IS NOT NULL}），
+     * 由 {@link TargetTableMeta} 持有，校验器据此给出**指名道姓**的提示。
+     */
     private static final String INDEXES_SQL = """
             SELECT i.indexrelid::regclass::text AS index_name,
+                   (i.indpred IS NOT NULL) AS is_partial,
                    (SELECT array_agg(a.attname ORDER BY a.attnum)
                       FROM pg_attribute a
                      WHERE a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)) AS cols
@@ -100,24 +115,31 @@ public class TargetMetadataReader {
             byName.put(c.name(), c);
         }
 
-        List<List<String>> uniqueIndexes = jdbc.query(INDEXES_SQL, (rs, i) -> {
+        List<List<String>> uniqueIndexes = new ArrayList<>();
+        List<List<String>> partialUniqueIndexes = new ArrayList<>();
+        jdbc.query(INDEXES_SQL, rs -> {
             Array arr = rs.getArray("cols");
             if (arr == null) {
-                return List.<String>of();
+                return;
             }
             Object raw = arr.getArray();
-            List<String> out = new ArrayList<>();
+            List<String> cols = new ArrayList<>();
             if (raw instanceof Object[] objs) {
                 for (Object o : objs) {
-                    out.add(String.valueOf(o));
+                    cols.add(String.valueOf(o));
                 }
             }
-            return out;
+            if (rs.getBoolean("is_partial")) {
+                partialUniqueIndexes.add(cols);
+            } else {
+                uniqueIndexes.add(cols);
+            }
         }, ref.schema(), ref.table());
 
-        TargetTableMeta meta = new TargetTableMeta(ref.schema(), ref.table(), byName, uniqueIndexes);
-        log.info("已加载目标表元数据: {} 列数={} 唯一索引={}",
-                ref.qualifiedTable(), byName.size(), uniqueIndexes);
+        TargetTableMeta meta = new TargetTableMeta(
+                ref.schema(), ref.table(), byName, uniqueIndexes, partialUniqueIndexes);
+        log.info("已加载目标表元数据: {} 列数={} 唯一索引={} 部分唯一索引={}",
+                ref.qualifiedTable(), byName.size(), uniqueIndexes, partialUniqueIndexes);
         return meta;
     }
 }

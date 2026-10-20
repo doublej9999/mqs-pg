@@ -363,6 +363,56 @@ class ConfigAdminTest extends AbstractPgIntegrationTest {
         admin.deleteDatasource(ds.id());
     }
 
+    @Test
+    @DisplayName("Upsert Key 上只有部分唯一索引时发布失败（I3 / M4）")
+    void publishRejectsPartialUniqueIndex() {
+        // 专门建一张表：唯一索引带 WHERE 谓词。
+        // 这种索引**不构成** MERGE 的唯一性保证 —— ON 条件不带谓词，
+        // 谓词外的行会同时匹配，运行期报 cardinality violation。
+        String partialTable = "cfg_admin_partial";
+        jdbc.execute("DROP TABLE IF EXISTS %s.%s".formatted(SCHEMA, partialTable));
+        jdbc.execute("""
+                CREATE TABLE %s.%s (
+                    id          BIGINT      NOT NULL,
+                    deleted     BOOLEAN     NOT NULL DEFAULT false,
+                    update_time TIMESTAMPTZ NOT NULL
+                )
+                """.formatted(SCHEMA, partialTable));
+        jdbc.execute("CREATE UNIQUE INDEX uk_partial_id ON %s.%s (id) WHERE deleted = false"
+                .formatted(SCHEMA, partialTable));
+
+        DatasourceDto ds = admin.createDatasource(dsRequest(PREFIX + "ds-partial", "123456"));
+        try {
+            TargetDto target = admin.createTarget(new TargetRequest(
+                    PREFIX + "tgt-partial", ds.id(), SCHEMA, partialTable,
+                    List.of("id"), "update_time"));
+            RouteSummaryDto route = admin.createRoute(new RouteRequest(
+                    PREFIX + "route-partial", TOPIC + "partial", TAG, target.id()));
+
+            Map<String, Object> content = Map.of(
+                    "mappingStrategy", "EXACT",
+                    "mappings", List.of(
+                            Map.of("target", "id", "source", "$.id",
+                                    "transform", Map.of("type", "long")),
+                            Map.of("target", "update_time", "source", "$.updatedAt",
+                                    "transform", Map.of("type", "timestamp"))));
+            DraftDto draft = admin.saveDraft(route.id(), new DraftRequest(content, "部分唯一索引"));
+
+            ValidationResultDto result = admin.publishVersion(route.id(), draft.version());
+            assertFalse(result.valid(), () -> "部分唯一索引不应被当成 MERGE 保证: " + result.issues());
+            // 提示要指名道姓说「部分」，否则用户以为自己索引没建成功
+            assertTrue(result.issues().stream().anyMatch(i ->
+                            "upsertKeys".equals(i.field()) && i.message().contains("部分")),
+                    () -> "应明确指出是部分唯一索引: " + result.issues());
+
+            admin.deleteRoute(route.id(), true);
+            admin.deleteTarget(target.id());
+        } finally {
+            admin.deleteDatasource(ds.id());
+            jdbc.execute("DROP TABLE IF EXISTS %s.%s".formatted(SCHEMA, partialTable));
+        }
+    }
+
     // ==================================================================
     // 版本生命周期
     // ==================================================================
