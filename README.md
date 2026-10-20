@@ -119,6 +119,30 @@ Vite 已把 `/api` 代理到 `http://localhost:8080`，因此不必处理跨域�
 > 仓库里的 `frontend/pnpm-workspace.yaml` 已把 `esbuild`、`vue-demi` 加入
 > `allowBuilds`；若换成 npm/yarn 则无此问题。
 
+### 5b. 一键起（Docker Compose）
+
+不想装 JDK 21 / Node / PostgreSQL 时，用容器把所有东西一起拉起来：
+
+```bash
+docker compose up -d --build
+# 前端控制台  http://localhost:5173
+# 后端 API    http://localhost:8080/api/routes
+```
+
+端口与单独跑时一致（前端 5173、后端 8080、PG 5432）。
+`SPRING_PROFILES_ACTIVE=dev`，所以 `/swagger-ui/index.html` 也可用。
+
+要点（都是容器里容易踩的地方）：
+- 后端连 PG 用服务名 `postgres`，**不是** `localhost` —— 容器内的 localhost 是它自己；
+- 前端 nginx 反代后端用服务名 `backend`（见 `frontend/nginx.conf`），
+  所以**不需要改**前端 `baseURL`；
+- 数据源密码默认以 `{noop}` 明文存（未设 `MQS_PG_CRYPTO_KEY` 时打 WARN）。
+  要启用加密，在仓库根目录 `.env` 写 `MQS_PG_CRYPTO_KEY=$(openssl rand -base64 32)`。
+  **不要**写一句随手编的字符串：`Base64.getDecoder` 会严格校验，后端会启动失败。
+
+后端容器用 `curl` 打 `/actuator/health/liveness`（不是 readiness ——
+readiness 失败只该摘流量，重启容器没有意义）。
+
 页面：运行总览、路由与版本、数据源、重试队列（可人工重放 / 取消）、错误与 DLQ、原始留存、模拟投递。
 
 「路由与版本」页已经能完成**整条链路的配置**：新建路由时依次选「数据源 → schema → 表 →

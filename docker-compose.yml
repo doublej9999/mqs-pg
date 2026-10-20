@@ -1,0 +1,72 @@
+# mqs-pg 一键起（L2）
+#
+#   docker compose up -d --build
+#
+# 对外端口与单独跑时保持一致，不要记两套：
+#   前端控制台  http://localhost:5173
+#   后端 API    http://localhost:8080/api/...
+#   PostgreSQL  localhost:5432（仅供本机 psql / e2e 脚本使用）
+#
+# 注意 compose 里的 curl/健康检查与服务名约定：
+#   - 容器内访问 PG 必须用服务名 postgres（容器里的 localhost 是它自己）；
+#   - nginx 反代后端必须用服务名 backend（见 frontend/nginx.conf）。
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      # 这些只是**本机开发**的默认值，不要用于生产
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # 用 pg_isready 而不是 psql 查询：后者需要认证，且首次初始化时会短暂失败
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build:
+      # 上下文是仓库根目录：Dockerfile 里要 COPY backend/pom.xml 与 backend/src
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      # 容器内的 localhost 是它自己 —— 必须用服务名 postgres。
+      # currentSchema 不能省（见 README「八个已踩过的坑」）。
+      MQS_PG_DB_URL: jdbc:postgresql://postgres:5432/postgres?currentSchema=mqs_pg,public
+      MQS_PG_DB_USER: postgres
+      MQS_PG_DB_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      # 加密密钥默认**不设**：不设时 PasswordCodec 落回 {noop} 明文存储并打一条
+      # WARN，本地联调够用（这也是 §9 Q3 保留明文回退的原因）。
+      # 生产必须设，且必须是合法的 Base64（Base64.getDecoder 会严格校验）——
+      # 随便写一句「my-secret-key」会让后端启动直接失败在 SecretKeySpec 上。
+      # 生成方式：openssl rand -base64 32
+      # 要让本机 compose 也走加密，在 .env 里写 MQS_PG_CRYPTO_KEY=<上面生成的值>
+      MQS_PG_CRYPTO_KEY: ${MQS_PG_CRYPTO_KEY:-}
+      SPRING_PROFILES_ACTIVE: dev
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        # 等 PG 真的能接受连接，而不是「容器起来了」
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      # 与文档里的控制台端口保持一致（dev server 也是 5173）
+      - "5173:80"
+    depends_on:
+      # 只等后端容器启动（不做 healthy 判定）：前端是纯静态资源，
+      # 后端还没就绪时页面照样能打开，只是接口会报错 —— 这比卡住整个栈更友好。
+      - backend
+
+volumes:
+  pgdata:

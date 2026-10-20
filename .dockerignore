@@ -1,0 +1,32 @@
+# 构建上下文排除（L2）
+#
+# build context 是仓库根目录，所以这里要同时排掉后端与前端的产物/依赖。
+# 不排的话：frontend/node_modules 通常几百 MB、backend/target 上百 MB，
+# 每次 docker build 都要把它们打包发给 daemon，构建时间会从几十秒变成几分钟。
+
+# ---- 依赖与产物 ----
+**/node_modules
+backend/target
+frontend/dist
+
+# ---- 版本控制与 IDE ----
+.git
+.gitignore
+.idea
+.vscode
+*.iml
+
+# ---- 文档与脚本（运行镜像用不到）----
+docs
+*.md
+scripts
+
+# ---- 本地配置（可能含真实密码，绝不能进镜像）----
+frontend/.env*
+backend/src/main/resources/application-prod.yml
+.env
+.env.*
+
+# ---- 测试与 CI ----
+.github
+**/*.log
