@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-10-20 · D3 e2e 脚本参数化（可在容器 / 无 docker CLI 环境跑）
+
+- **背景**
+  - `scripts/e2e-config-api.ps1` 之前硬编码三处环境假设：SQL 走 `docker exec postgres psql`、
+    数据源 URL 固定 `jdbc:postgresql://localhost:5432/postgres`、测试表固定叫 `e2e_orders`。
+  - 于是它只能在「本机有名为 `postgres` 的容器 + 后端也跑在本机」这一种环境下工作；
+    后端跑进容器（compose / k8s）后 `localhost` 指向容器自身，脚本必然失败。
+  - 另外 `CREATE TABLE IF NOT EXISTS` 第二次运行会产生 NOTICE，而 psql 把 NOTICE 写 stderr，
+    在 `$ErrorActionPreference='Stop'` 下会被 PowerShell 当成终止错误 —— 与脚本
+    「可反复运行」的承诺矛盾（首次运行没有 NOTICE，所以这个坑只在重跑时暴露）。
+
+- **改动**
+  - 新增参数：`-SqlMode docker|psql`、`-PgHost/-PgPort/-PgUser/-PgPassword/-PgDatabase`、
+    `-DbContainer`、`-TargetJdbcUrl/-TargetUser/-TargetPassword`；`Invoke-Sql` 按 `SqlMode` 分流，
+    psql 分支用 `PGPASSWORD` 环境变量传密码并在 `finally` 里立刻清除。
+  - `Invoke-Sql` 内部临时放宽 `$ErrorActionPreference`，只看退出码；并把
+    `NOTICE/WARNING/HINT/psql:` 行从返回值里剔除，避免污染 `SELECT` 的结果。
+  - 资源名改为 `$runId`（Guid 前 12 位）：数据源/目标表/路由/Topic **以及测试表名**都不再共用，
+    清理逻辑从「按名字前缀删」改成「按本次精确名删 + `DROP TABLE`」，
+    这样并发跑两次也不会互相删数据。
+  - 建表 SQL 改为单行拼接（先落变量再传参）：多行 SQL 在不同 shell / psql 客户端下换行可能被二次解析；
+    同时避开 `Invoke-Sql ("a" -f $x) + 'b'` 被解析成 `(Invoke-Sql ...) + 'b'` 的坑。
+
+- **验证**
+  - **未执行**。本机 Docker Desktop 未运行，既起不了 `postgres` 容器，也没有本地 PG 可供 `-SqlMode psql` 直连；
+    脚本需要后端已启动，因此本轮无法跑通。
+  - 已做的静态检查：用 `[System.Management.Automation.Language.Parser]::ParseFile` 解析该脚本，
+    **0 个语法错误**，且参数表确认为
+    `Base, DbContainer, TimeoutSeconds, SqlMode, PgHost, PgPort, PgUser, PgPassword, PgDatabase, TargetJdbcUrl, TargetUser, TargetPassword`
+    （旧版只有前三个）。运行期分支（`docker` vs `psql`、清理逻辑）不在语法检查覆盖范围内。
+  - **待补**：起 Docker 后按 README「测试」一节分别用两种模式各跑一次，并把输出补进本节。
+
+- **影响与回滚**
+  - 只影响验收脚本，不影响运行时。默认行为（`docker` 模式 + 默认容器名）与旧版一致，
+    但**测试表名不再复用** `e2e_orders`，而是每次新建并在结束时删除 —— 旧脚本写入的
+    `e2e_orders` 残留数据不再被自动清理（需要时手工 `DROP TABLE biz_demo.e2e_orders`）。
+  - 回滚：`git checkout -- scripts/e2e-config-api.ps1` 并删除本节。
+
+---
+
 ## 2026-10-19 · RawStore 优雅停机排空
 
 - **背景**

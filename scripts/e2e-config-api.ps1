@@ -12,14 +12,43 @@
 
     脚本自带清理：结束时会删掉自己创建的路由/目标表/数据源，并清空测试表。
 
+    SQL 访问有两种方式，默认与 README 的「docker 起一个 PG」保持一致：
+      - docker（默认）：`docker exec <DbContainer> psql ...`，容器名用 -DbContainer 覆盖；
+      - psql：直连，用 -PgHost/-PgPort/-PgUser/-PgPassword/-PgDatabase。
+    脚本通过 API 新建的数据源必须让**后端进程**连得上，因此另有
+    -TargetJdbcUrl/-TargetUser/-TargetPassword（后端跑在容器里时就填服务名，如
+    `jdbc:postgresql://postgres:5432/postgres`）。
+
 .EXAMPLE
     pwsh -File scripts/e2e-config-api.ps1
+
+.EXAMPLE
+    # 容器不叫 postgres（例如 Testcontainers 风格的名字）
+    pwsh -File scripts/e2e-config-api.ps1 -DbContainer pg-min
+
+.EXAMPLE
+    # 不装 docker CLI，直接用 psql 客户端
+    pwsh -File scripts/e2e-config-api.ps1 -SqlMode psql -PgHost localhost -PgPort 5432 -PgUser postgres -PgPassword 123456
 #>
 [CmdletBinding()]
 param(
     [string]$Base = 'http://localhost:8080/api',
     [string]$DbContainer = 'postgres',
-    [int]$TimeoutSeconds = 60
+    [int]$TimeoutSeconds = 60,
+
+    # SQL 访问方式：docker（默认，docker exec）或 psql（本机 psql 客户端直连）
+    [ValidateSet('docker', 'psql')]
+    [string]$SqlMode = 'docker',
+    [string]$PgHost = 'localhost',
+    [int]$PgPort = 5432,
+    [string]$PgUser = 'postgres',
+    [string]$PgPassword = '123456',
+    [string]$PgDatabase = 'postgres',
+
+    # 脚本经 API 创建的数据源 —— 必须从「后端进程」视角可达
+    [string]$TargetJdbcUrl = 'jdbc:postgresql://localhost:5432/postgres',
+    [string]$TargetUser = 'postgres',
+    [string]$TargetPassword = '123456'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,9 +91,36 @@ function Invoke-Api {
 }
 
 function Invoke-Sql([string]$sql) {
-    $out = docker exec -i $DbContainer psql -U postgres -d postgres -tAc $sql 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "SQL 失败: $sql`n$out" }
-    return ($out | Out-String).Trim()
+    # psql 把 NOTICE / WARNING 写到 stderr，而 PowerShell 5.1 在 $ErrorActionPreference='Stop'
+    # 下会把**被重定向的 stderr**当成终止错误 —— 于是 `CREATE TABLE IF NOT EXISTS`
+    # 第二次运行时那句 "relation ... already exists, skipping" 的 NOTICE 就会直接中断脚本，
+    # 与「可反复运行」的承诺矛盾（首次运行没有 NOTICE，所以这个坑只在重跑时暴露）。
+    # 这里临时放宽到 Continue，只看退出码；并把 NOTICE/WARNING/HINT 行从返回值里剔除，
+    # 避免它们污染 SELECT 的结果。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($SqlMode -eq 'psql') {
+            # psql 不读参数里的密码，只能用 PGPASSWORD 环境变量；用完立刻清掉，
+            # 避免泄漏到之后启动的子进程
+            $env:PGPASSWORD = $PgPassword
+            try {
+                $out = & psql -h $PgHost -p $PgPort -U $PgUser -d $PgDatabase -v ON_ERROR_STOP=1 -tAc $sql 2>&1
+            } finally {
+                Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+            }
+        } else {
+            $out = docker exec -i $DbContainer psql -U $PgUser -d $PgDatabase -tAc $sql 2>&1
+        }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+
+    if ($code -ne 0) { throw "SQL 失败: $sql`n$out" }
+    $cleaned = @($out) | ForEach-Object { "$_" } |
+        Where-Object { $_ -notmatch '^(NOTICE|WARNING|HINT|psql):' }
+    return ($cleaned -join "`n").Trim()
 }
 
 function Wait-Api([int]$seconds) {
@@ -84,13 +140,15 @@ function Wait-Api([int]$seconds) {
 # 准备
 # ------------------------------------------------------------------
 $stamp = Get-Date -Format 'HHmmss'
-$dsName = "e2e-ds-$stamp"
-$targetName = "e2e-target-$stamp"
-$routeName = "e2e-route-$stamp"
-$topic = "e2e-topic-$stamp"
+$runId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
+$dsName = "e2e-ds-$runId"
+$targetName = "e2e-target-$runId"
+$routeName = "e2e-route-$runId"
+$topic = "e2e-topic-$runId"
 $tag = 'e2e.tag'
-$table = 'e2e_orders'
+$table = "e2e_orders_$runId"
 $schema = 'biz_demo'
+$sourceMarker = "E2E_SCRIPT_$runId"
 
 $routeId = $null
 $targetId = $null
@@ -106,16 +164,18 @@ Step "0.5 确保测试表 $schema.$table 存在"
 # 让脚本自给自足：不必先手工建表，重复运行也不会撞「表已存在」。
 # source 列专门用来验证 constant 映射；updated_at 是 NOT NULL 无默认值，
 # 用来验证「必须提供来源」的发布校验。
-Invoke-Sql @"
-CREATE TABLE IF NOT EXISTS $schema.$table (
-    id         BIGINT       NOT NULL PRIMARY KEY,
-    order_no   TEXT         NOT NULL,
-    amount     NUMERIC(18,2),
-    status     INTEGER,
-    updated_at TIMESTAMPTZ  NOT NULL,
-    source     TEXT
-)
-"@ | Out-Null
+# 刻意写成**单行**：多行 SQL 经不同 shell / psql 客户端传参时，
+# 换行可能被二次解析（cmd 转发、%* 展开等），单行最稳。
+# 注意：拼接必须先落进变量再传参 —— 写成 `Invoke-Sql ("a" -f $x) + 'b'`
+# 会被解析成 `(Invoke-Sql ("a" -f $x)) + 'b'`，只把第一个片段传进去。
+$createSql = "CREATE TABLE IF NOT EXISTS $schema.$table (" +
+    'id BIGINT NOT NULL PRIMARY KEY, ' +
+    'order_no TEXT NOT NULL, ' +
+    'amount NUMERIC(18,2), ' +
+    'status INTEGER, ' +
+    'updated_at TIMESTAMPTZ NOT NULL, ' +
+    'source TEXT)'
+Invoke-Sql $createSql | Out-Null
 Assert-Equal 6 (Invoke-Sql "SELECT count(*) FROM information_schema.columns WHERE table_schema='$schema' AND table_name='$table'") '测试表共 6 列'
 
 $before = Invoke-Sql "SELECT count(*) FROM $schema.$table"
@@ -127,9 +187,9 @@ try {
     # --------------------------------------------------------------
     $ds = Invoke-Api Post '/datasources' @{
         name       = $dsName
-        jdbcUrl    = 'jdbc:postgresql://localhost:5432/postgres'
-        username   = 'postgres'
-        password   = '123456'
+        jdbcUrl    = $TargetJdbcUrl
+        username   = $TargetUser
+        password   = $TargetPassword
         poolConfig = @{ maximumPoolSize = 4; minimumIdle = 0 }
     }
     $dsId = $ds.id
@@ -206,7 +266,7 @@ try {
                 @{ target = 'amount'; source = '$.amount'; transform = @{ type = 'decimal' } }
                 @{ target = 'status'; source = '$.status'; transform = @{ type = 'enum'; mapping = @{ CREATED = 1; PAID = 2; CANCELLED = 3 } } }
                 @{ target = 'updated_at'; source = '$.updatedAt'; transform = @{ type = 'timestamp'; pattern = "yyyy-MM-dd'T'HH:mm:ssXXX"; zone = 'Asia/Shanghai' } }
-                @{ target = 'source'; constant = 'E2E_SCRIPT' }
+                @{ target = 'source'; constant = $sourceMarker }
             )
         }
         changeNote = 'e2e 脚本写入'
@@ -255,7 +315,7 @@ try {
                 @{ target = 'amount'; source = '$.amount'; transform = @{ type = 'decimal' } }
                 @{ target = 'status'; source = '$.status'; transform = @{ type = 'enum'; mapping = @{ CREATED = 1; PAID = 2; CANCELLED = 3 } } }
                 @{ target = 'updated_at'; source = '$.updatedAt'; transform = @{ type = 'timestamp'; pattern = "yyyy-MM-dd'T'HH:mm:ssXXX"; zone = 'Asia/Shanghai' } }
-                @{ target = 'source'; constant = 'E2E_SCRIPT' }
+                @{ target = 'source'; constant = $sourceMarker }
             )
         }
         changeNote = 'e2e 脚本写入（完整）'
@@ -305,7 +365,7 @@ try {
         Assert-Equal "E2E-$stamp" $parts[1] 'order_no 通过 JSONPath 映射正确'
         Assert-Equal '123.45' $parts[2] 'amount 按 decimal 转换正确'
         Assert-Equal '2' $parts[3] 'status 按枚举 PAID→2 转换正确'
-        Assert-Equal 'E2E_SCRIPT' $parts[4] 'source 常量映射正确'
+        Assert-Equal $sourceMarker $parts[4] 'source 常量映射正确'
         Assert-Equal '2026-09-27 13:45:00' $parts[5] 'updated_at 按 Asia/Shanghai 时区解析正确（UTC 13:45）'
     }
 
@@ -343,11 +403,11 @@ try {
     if ($targetId) { try { Invoke-Api Delete "/targets/$targetId" | Out-Null } catch { } }
     if ($dsId) { try { Invoke-Api Delete "/datasources/$dsId" | Out-Null } catch { } }
 
-    # 兜底：按名字前缀清掉本次可能残留的配置
-    Invoke-Sql "DELETE FROM mqs_pg.cfg_route WHERE name LIKE 'e2e-route-%'" | Out-Null
-    Invoke-Sql "DELETE FROM mqs_pg.cfg_target WHERE name LIKE 'e2e-target-%'" | Out-Null
-    Invoke-Sql "DELETE FROM mqs_pg.cfg_datasource WHERE name LIKE 'e2e-ds-%'" | Out-Null
-    Invoke-Sql "DELETE FROM $schema.$table WHERE source = 'E2E_SCRIPT'" | Out-Null
+    # 兜底：只清掉本次运行创建的精确资源，避免并发运行时误删其它验收数据
+    Invoke-Sql "DELETE FROM mqs_pg.cfg_route WHERE name = '$routeName'" | Out-Null
+    Invoke-Sql "DELETE FROM mqs_pg.cfg_target WHERE name = '$targetName'" | Out-Null
+    Invoke-Sql "DELETE FROM mqs_pg.cfg_datasource WHERE name = '$dsName'" | Out-Null
+    Invoke-Sql "DROP TABLE IF EXISTS $schema.$table" | Out-Null
     Pass '测试数据已清理'
 }
 
