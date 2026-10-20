@@ -7,6 +7,119 @@
 ---
 
 #
+## 2026-10-21 · 里程碑 H 全部交付（H1–H7 可观测性与自愈）
+
+七条的共同主题是「注释/接口承诺了某种兜底，但兜底其实不存在」。
+逐条记录，含踩过的坑。
+
+- **H1 注册表周期性对账**
+  - 背景：`ConfigRefreshListener` 的 catch 里写着「下一次 refreshAll 会纠正」，
+    但运行期**没有任何周期性刷新** —— `refreshAll()` 只在 `@PostConstruct`
+    与 `ApplicationReadyEvent` 调过。一次 DB 抖动后内存注册表会停在旧状态直到重启。
+  - 改动：`DbConfigRegistry#reconcile`，只跑一条
+    `SELECT id, active_version FROM cfg_route WHERE status='ACTIVE'` 做比对，
+    仅在不一致时 refresh；库里已不 ACTIVE 而内存还挂着的也摘掉。
+    刻意不调 `refreshAll`（它要对每条路由再读 version 与 target）。
+  - 开关拆两层：`@Scheduled` 挂在 `scheduledReconcile()` 上受
+    `mqs-pg.registry.reconcile-enabled` 控制，`reconcile()` 永远可手动调用。
+    **这个拆分是被测试逼出来的**：第一版把开关放进 `reconcile()`，
+    测试里手动触发也被挡掉，跑出来的是「开关生效」而不是「对账有效」。
+  - 关闭用 `reconcile-enabled=false` 而不是把间隔设 0 —— Spring 的 `fixedDelay`
+    要求正数，设 0 会在启动阶段抛异常，而不是安静地不跑。
+  - 集成测试基类默认关掉它：后台线程改内存注册表会与
+    「手工改库再断言注册表状态」的用例竞态。
+
+- **H2 健康探针改读内存缓存**
+  - 背景：`MqsPgHealthIndicator` 直接调 `retryService.summary()`（一次 `GROUP BY status`），
+    而 K8s 每 5–10s 探一次 `/actuator/health` —— 等于把聚合查询挂到探针频率上；
+    DB 不可用时 health 还会跟着变慢。而 `RetryService` 本来就有 15s 刷新的内存 gauge。
+  - 改动：`cachedSummary(Duration staleAfter)` 只读 `backlogGauges`，返回计数 +
+    `stale` + `refreshedAt`；**过期只标注 stale，不判 DOWN** ——
+    探针要回答「进程能否服务」，不是「指标是否新鲜」，判 DOWN 会让一次刷新失败
+    直接导致实例被摘。
+  - 验证：`MqsPgHealthIndicatorTest` 用 `verify(retryService, never()).summary()` 咬住。
+
+- **H3 `/api/pg/health` 改为聚合视图**
+  - 背景：这张卡叫「PG 健康」，运维理解为**目标库**，实际探的是配置库 ——
+    目标库挂了它仍显示正常；且与 `PgHealthGate` 完全脱节；还把
+    `e.getMessage()` 回吐前端（可能带连接串）。
+  - 改动：返回 `configDb` + `targets`（各数据源闸门）+ `healthy`；
+    失败原因固定文案，细节只进日志。仍用 `ApiResponse.ok` 包装 ——
+    这是「探测结果」而非「接口失败」，配置库挂掉时接口本身也要能返回结构。
+  - 前端 `describePgHealth()` 同步：两个库都说清楚；闸门全关时列出具体
+    `datasourceId`；样本为空时显示「目标库暂无写入样本」而不是「全部正常」。
+
+- **H4 异常映射**
+  - 背景：兜底分支返回 `e.getMessage()`（可能含 SQL/连接串/类名）；约束冲突
+    连约束名与 Key 值一起回吐；所有 `ProcessingException` 一律 400，而
+    `CONFIG_MISSING` 严重度是 FATAL；缺非法 JSON 与路径参数类型的分支 → 500。
+  - **先拆码再映射，顺序不能反**：`CONFIG_MISSING` 被当成万能入参错误用了 38 处，
+    直接按严重度映射成 503 会让所有表单校验变成 503。
+    新增 `NOT_FOUND` / `INVALID_INPUT`（均 DATA），只迁移**控制台入参路径**；
+    消费侧（`TargetMetadataReader`、`TargetTableMeta`、`ReplayOutcome`、
+    `ConfigRefreshListener`）保持 `CONFIG_MISSING`，那里的 FATAL 语义是对的。
+  - 已核对 `loadSnapshot` 改码不改变重放语义：`RetryReplayer.replay` 对
+    `registry.get` 抛出的任何 `RuntimeException` 都走「不确定 → 二次确认」。
+  - 处理器一律 `ResponseEntity` + 12 位 `traceId`；5xx 记 error、其余记 warn；
+    新增非法 JSON / 类型错误 / 缺参数三个 400 分支；约束冲突改为
+    「数据冲突，请刷新后重试」。
+  - `RetryController` 三个接口任务不存在时原来 `return ApiResponse.fail(...)`
+    HTTP 仍 200，改为抛 `NOT_FOUND` → 404。
+  - **踩坑**：Spring Framework 7 移除了 `ResponseEntity#getStatus()`，只有
+    `getStatusCode()`，且返回 `HttpStatusCode` 而非 `HttpStatus` ——
+    断言要比 `.value()`，否则 JUnit 报「expected: <400> but was: <400 BAD_REQUEST>」
+    这种看着像通过的错误。
+
+- **H5 目标数据源缺失时的边界**
+  - 背景：一条隐蔽故障链 —— `datasourceId()` 返回 null → `PgHealthGate` 内部
+    `ConcurrentHashMap.computeIfAbsent` 抛 NPE → NPE 发生在 `tryRecover` 的
+    **catch 块内**、逃出去被消费循环最外层的 `catch (Throwable)` 接住 →
+    **消费线程永久退出**，只留一条 ERROR。概率低，后果是「静默停一个路由」。
+  - 改动：`datasourceId()` 返回原始 `long`，未知用 `-1`（闸门对未知默认放行）；
+    `PgHealthGate` 全部签名收紧为 `long`，null 编译期就传不进来；
+    `BatchManager` 同一处拆箱风险一并兜住。
+  - `ConsumerManager.startRoute` 拿不到配置或数据源时**不提交消费者**，
+    只置 PAUSED + 可读原因，交给 H1 的对账重新拉起；删掉那个
+    `new JdbcTemplate()`（无 DataSource）—— 它是「必然失败的探测器」，
+    每次 tryRecover 都抛异常，闸门永远恢复不了、线程还白占着。
+
+- **H6 关键失败路径的日志**
+  - 发布校验失败只记「问题数」→ 补前 5 条 `field: message`；
+  - 指标刷新失败是 `log.debug`（生产 INFO 下等于静默）→ 提到 warn 并计入
+    `mqspg.metrics.refresh.failed`；
+  - AFTER_COMMIT 监听器整段一个 try、日志只有 routeId 与 change →
+    拆成 `refreshThen(routeId, change, action)`，refresh 单独捕获且
+    **失败就不再动消费者**（否则拉起一个注定空转的线程），消费者动作再单独捕获。
+  - **踩坑**：`refreshThen` 第三个参数写成 `Runnable`，但
+    `consumerManager.restart/ensureStarted` 返回值不是 void，lambda 里
+    `return null` 报「lambda 表达式的返回类型不兼容」，改成表达式 lambda。
+
+- **H7 liveness / readiness 分组**
+  - 背景：只有单一 `/actuator/health`，而 `mqsPg` 把「闸门关闭」「积压超限」
+    都算进同一个状态。K8s 拿它当 liveness 时，一次 PG 抖动就会重启整个 Pod ——
+    重启修不好 PG，反而丢掉内存缓冲、放大故障。
+  - 改动：`liveness: ping,diskSpace`（进程存活）、`readiness: db,mqsPg`（能否接流量）。
+    不涉及端点暴露面收敛，不与已排除的鉴权工作绑定。
+  - **踩坑**：Boot 4 的 `HealthEndpoint#healthForPath` 返回 `HealthDescriptor`
+    而非 `Health`，取 components 要转 `CompositeHealthDescriptor` 用 `getComponents()`。
+
+- **影响与回滚**
+  - 全部为可观测性、失败隔离与边界收紧，不触及 ACK 与 MERGE 写入链路，§6 红线不受影响。
+  - H5 改变了「数据源不可用时也提交消费者」的行为（现在不提交），
+    已确认没有测试依赖旧行为。
+  - H4 会改变前端看到的提示文案，但前端只按 `err.code` 分支（K3 已就位），
+    不依赖中文子串。
+  - 回滚：H1 关 `reconcile-enabled`；H2 恢复调 `summary()`；H3 恢复旧响应体（需同步前端）；
+    H4 把 `NOT_FOUND`/`INVALID_INPUT` 换回 `CONFIG_MISSING` 并恢复单一 400 映射；
+    H5 恢复空 `JdbcTemplate` 兜底；H7 删掉 `group` 配置。
+
+- **验证汇总**：`mvn test` 83 passed（G 收尾时 65 → H 新增
+  MqsPgHealthIndicatorTest 4、GlobalExceptionHandlerTest 5、HealthGroupsTest 2、
+  PgHealthGateTest 2、ConfigRefreshListenerTest 4，加 ConfigRegistryTest 增 1）。
+  `pnpm build` 通过。
+
+---
+
 ## 2026-10-20 · G5 / G6 / G7 运行状态行、连接池失效时机、注册表生命周期
 
 三条都属「内存与库不同步」这一类，症状都很隐蔽，合在一起记。
