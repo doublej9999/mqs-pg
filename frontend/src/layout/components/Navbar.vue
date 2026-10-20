@@ -32,6 +32,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ArrowDown, UserFilled } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 
 defineProps({

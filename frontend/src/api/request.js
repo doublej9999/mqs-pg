@@ -1,5 +1,6 @@
 import axios from 'axios'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 
 /**
  * Axios 封装（沿用 vue-admin-template 的约定）。

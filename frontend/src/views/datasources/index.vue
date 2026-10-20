@@ -113,7 +113,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { confirmAction } from '@/utils/confirm'
 import {

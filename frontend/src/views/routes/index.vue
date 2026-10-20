@@ -405,7 +405,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Coin, Plus, Refresh } from '@element-plus/icons-vue'
 import { confirmAction } from '@/utils/confirm'
 import {

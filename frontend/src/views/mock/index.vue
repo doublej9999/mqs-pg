@@ -71,7 +71,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
 import { Refresh } from '@element-plus/icons-vue'
 import { mockStatus, publishMock } from '@/api/mock'
 
