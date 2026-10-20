@@ -114,6 +114,34 @@ function stateTagType(state) {
   return 'info'
 }
 
+/**
+ * 把聚合健康视图压成一句话。
+ *
+ * 卡片叫「PG 健康」，运维默认理解为**目标库**。改造前它探的其实是配置库，
+ * 目标库挂了这张卡仍是「正常」—— 所以这里两个库都要说清楚，
+ * 并且明确列出是哪个数据源的闸门关了，否则只看到「异常」没法定位。
+ */
+function describePgHealth(h) {
+  const parts = []
+  const cfg = h.configDb
+  if (cfg) {
+    parts.push(cfg.healthy === true ? '配置库正常' : `配置库不可用`)
+  }
+  const targets = Array.isArray(h.targets) ? h.targets : []
+  if (targets.length === 0) {
+    // 闸门只记录「出现过写入尝试」的数据源，样本为空不代表健康，要说清楚
+    parts.push('目标库暂无写入样本')
+  } else {
+    const closed = targets.filter((t) => t.healthy === false)
+    if (closed.length === 0) {
+      parts.push(`目标库 ${targets.length} 个数据源全部正常`)
+    } else {
+      parts.push(`目标库异常：数据源 ${closed.map((t) => t.datasourceId).join('、')} 闸门已关闭`)
+    }
+  }
+  return parts.join('；')
+}
+
 async function loadAll() {
   loading.value = true
   // 各请求互相独立：一个失败不应让整页空白
@@ -129,8 +157,10 @@ async function loadAll() {
   if (states.status === 'fulfilled') consumerStates.value = states.value || []
 
   if (health.status === 'fulfilled') {
-    pgHealthy.value = health.value?.healthy !== false
-    pgDetail.value = health.value?.detail || ''
+    const h = health.value || {}
+    // H3 之后 /api/pg/health 是聚合视图：configDb（配置库）+ targets（各数据源闸门）
+    pgHealthy.value = h.healthy !== false
+    pgDetail.value = describePgHealth(h)
   } else {
     // 请求本身失败（后端未起 / 超时）：这是「不知道」，不是「正常」
     pgHealthy.value = null

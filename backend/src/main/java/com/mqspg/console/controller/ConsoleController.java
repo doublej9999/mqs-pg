@@ -5,18 +5,21 @@ import com.mqspg.common.api.ApiResponse;
 import com.mqspg.config.dto.RouteSummaryDto;
 import com.mqspg.config.service.ConfigService;
 import com.mqspg.consumer.ConsumerManager;
+import com.mqspg.consumer.PgHealthGate;
 import com.mqspg.consumer.RouteConsumer;
 import com.mqspg.raw.RawProperties;
 import com.mqspg.retry.RetryService;
 import com.mqspg.retry.entity.RtErrorRecord;
 import com.mqspg.retry.mapper.RtErrorRecordMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +30,7 @@ import java.util.Map;
  * <p>这些接口只做**查询与聚合**：运行总览、消费状态、PG 健康、原始留存、错误流水。
  * 变更类操作各自留在 RouteController / RetryController / MockController。
  */
+@Slf4j
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -38,6 +42,7 @@ public class ConsoleController {
     private final JdbcTemplate jdbc;
     private final RawProperties rawProperties;
     private final ConsumerManager consumerManager;
+    private final PgHealthGate healthGate;
 
     /** 运行总览。 */
     @GetMapping("/overview")
@@ -95,19 +100,59 @@ public class ConsoleController {
         return ApiResponse.ok(data);
     }
 
-    /** PG 连通性探测。控制台用它显示「数据库现在是否可用」。 */
+    /**
+     * PG 健康聚合视图。
+     *
+     * <p><b>原来是「探配置库，然后把异常原文回吐」</b>，有三个毛病：
+     * <ol>
+     *   <li>控制台这张卡叫「PG 健康」，运维默认理解为**目标库**，实际探的是配置库 ——
+     *       目标库挂了这张卡仍是「正常」，正好漏掉最该报的那一种故障；</li>
+     *   <li>与 {@link PgHealthGate} 的真实状态（各数据源的闸门）完全脱节；</li>
+     *   <li>{@code e.getMessage()} 直接返回前端，可能带连接串。</li>
+     * </ol>
+     *
+     * <p>现在返回三块：{@code configDb}（配置库探活）、{@code targets}（各数据源闸门）、
+     * {@code healthy}（两者皆正常才 true）。失败原因统一为固定文案，细节只进日志。
+     * 仍然用 {@code ApiResponse.ok} 包装 —— 这是「探测结果」而不是「接口失败」，
+     * 配置库挂掉时接口本身也要能返回结构，否则前端连「挂了」都显示不出来。
+     */
     @GetMapping("/pg/health")
     public ApiResponse<Map<String, Object>> pgHealth() {
         Map<String, Object> data = new LinkedHashMap<>();
+
+        // 1) 配置库：一次轻量查询即可，不查 version() —— 那个字符串对排障没有增量信息
+        Map<String, Object> configDb = new LinkedHashMap<>();
         try {
-            String version = jdbc.queryForObject("SELECT version()", String.class);
-            data.put("healthy", true);
-            data.put("detail", version);
-            data.put("serverTime", jdbc.queryForObject("SELECT now()", String.class));
+            configDb.put("healthy", true);
+            configDb.put("detail", jdbc.queryForObject("SELECT now()", String.class));
         } catch (RuntimeException e) {
-            data.put("healthy", false);
-            data.put("detail", e.getMessage());
+            // 失败原因不进响应体（可能含连接串），只进日志
+            log.warn("配置库探活失败", e);
+            configDb.put("healthy", false);
+            configDb.put("detail", "配置库不可用");
         }
+        data.put("configDb", configDb);
+
+        // 2) 目标库：按数据源汇总闸门状态
+        Map<Long, Boolean> gates = healthGate.snapshot();
+        List<Map<String, Object>> targets = new ArrayList<>();
+        boolean anyTargetClosed = false;
+        for (Map.Entry<Long, Boolean> e : gates.entrySet()) {
+            Map<String, Object> t = new LinkedHashMap<>();
+            t.put("datasourceId", e.getKey());
+            t.put("healthy", e.getValue());
+            if (!e.getValue()) {
+                anyTargetClosed = true;
+                // 闸门自己记着上一次的失败原因，拿来当 detail 足够定位
+                t.put("detail", "写入失败已达阈值，闸门已关闭");
+            }
+            targets.add(t);
+        }
+        data.put("targets", targets);
+
+        // 3) 总状态：两者皆正常才 true。未出现过写入尝试的数据源不参与判定
+        //    （未知默认放行，不构成不健康）
+        data.put("healthy", Boolean.TRUE.equals(configDb.get("healthy")) && !anyTargetClosed);
         return ApiResponse.ok(data);
     }
 
