@@ -28,5 +28,9 @@ COPY --from=build /build/dist /usr/share/nginx/html
 
 EXPOSE 80
 
+# 用 127.0.0.1 而不是 localhost：alpine 的 /etc/hosts 里 `localhost` 优先解析到
+# **::1**（IPv6），而 nginx 只听 0.0.0.0:80（IPv4），于是健康检查稳定得到
+# `can't connect to remote host: Connection refused` —— 容器实际是好的，
+# 却被标成 unhealthy（实测踩到过）。写 IPv4 字面量可以绕开解析顺序。
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-  CMD ["wget", "-q", "--spider", "http://localhost/"]
+  CMD ["wget", "-q", "--spider", "http://127.0.0.1/"]

@@ -21,7 +21,14 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 改了数据目录布局：数据放在 /var/lib/postgresql/<主版本号>/ 下，
+      # 以支持 pg_upgrade --link。挂在老的 /var/lib/postgresql/data 上会被判定为
+      # 「有不属于本版本的数据」，容器直接**拒绝启动**：
+      #   Error: in 18+, these Docker images are configured to store database data in a
+      #   format which is compatible with "pg_ctlcluster" ...
+      #   Counter to that, there appears to be PostgreSQL data in: /var/lib/postgresql/data
+      # 所以这里挂父目录 /var/lib/postgresql（见 docker-library/postgres#1259）。
+      - pgdata:/var/lib/postgresql
     healthcheck:
       # 用 pg_isready 而不是 psql 查询：后者需要认证，且首次初始化时会短暂失败
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -48,6 +55,12 @@ services:
       # 生成方式：openssl rand -base64 32
       # 要让本机 compose 也走加密，在 .env 里写 MQS_PG_CRYPTO_KEY=<上面生成的值>
       MQS_PG_CRYPTO_KEY: ${MQS_PG_CRYPTO_KEY:-}
+      # demo 种子数据里的目标数据源写的是 `jdbc:postgresql://localhost:5432/postgres`，
+      # 在本机直跑时正确，但**在后端容器里 localhost 是容器自己**，
+      # 连接必然被拒，路由会一直停在「目标数据源不可用，等待恢复后自动拉起」。
+      # 这里把主机位改成服务名。种子迁移本身不能改（已应用），
+      # 所以做成运行期覆盖，本机直跑时不设此项即为原行为。
+      MQS_PG_DATASOURCE_LOCALHOST_OVERRIDE: postgres
       SPRING_PROFILES_ACTIVE: dev
     ports:
       - "8080:8080"

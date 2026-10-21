@@ -43,11 +43,14 @@ EXPOSE 8080
 # 健康检查打 actuator 的 liveness 组（不是 readiness）：
 # readiness 失败只该摘流量，容器本身还好着，重启它没有意义。
 #
-# 用 wget 而不是 curl：eclipse-temurin:21-jre 基于 Ubuntu，装了 curl 反而多一层；
-# 而 /dev/tcp 是 **bash** 的特性，运行阶段用的 sh（dash）不支持，不能那样写。
-# （Debian/Ubuntu 的 temurin 镜像里 curl 其实在，但显式 apt 装一次更可控，
-#  见上面的 RUN —— 这样升级基础镜像也不会因为「恰好没有 curl」而静默失效。）
+# 用 curl：运行阶段是 Ubuntu 基础镜像，curl 未必预装，已在上面的 RUN 里显式
+# apt 装一次 —— 这样升级基础镜像也不会因为「恰好没有 curl」而静默失效。
+# （曾经想用 /dev/tcp，那是 **bash** 特性，而 HEALTHCHECK 走的是 sh(dash)，不成立。）
+#
+# 用 127.0.0.1 而不是 localhost：/etc/hosts 会把 localhost 同时映射到 ::1 与
+# 127.0.0.1，解析顺序不保证；而 Spring Boot 默认只绑 IPv4 的 0.0.0.0。
+# 写 IPv4 字面量可绕开这个不确定性（前端镜像里实测踩到过同类问题）。
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-  CMD ["curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/actuator/health/liveness"]
+  CMD ["curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/actuator/health/liveness"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
