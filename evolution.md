@@ -7,6 +7,109 @@
 ---
 
 #
+## 2026-10-21 · L2 镜像构建实机验证（并修掉验证中暴露的三个真实缺陷）
+
+上一轮 L2 只做了静态核对，明确记着「镜像构建未验证、完整 compose up 没跑过」。
+这次走代理把镜像拉下来、真跑了一遍。**跑通的过程本身就是三个 bug 的发现过程**，
+三个都不是配置笔误，而是会让容器化部署直接不可用的问题。
+
+### 验证条件
+
+本机 Docker Hub 不可达（`registry-1.docker.io` / `auth.docker.io` 探测 False），
+经 `http://127.0.0.1:10808` 代理可达。注意一个现象：**`docker pull` 能成功而
+`docker build` 拉基础镜像失败** —— Desktop 的代理设置对 pull 生效，BuildKit
+拉基础镜像走的是另一条路。解决办法是先把四个基础镜像 `docker pull` 到本地，
+`build` 就直接命中本地缓存。四个镜像都拉到后，两个 Dockerfile 均构建成功。
+
+### 缺陷 1：postgres:18 的数据目录布局变了，挂老路径容器直接拒绝启动
+
+```
+Error: in 18+, these Docker images are configured to store database data in a
+format which is compatible with "pg_ctlcluster" ...
+Counter to that, there appears to be PostgreSQL data in: /var/lib/postgresql/data
+```
+
+18+ 把数据放在 `/var/lib/postgresql/<主版本号>/` 下（为了 `pg_upgrade --link`），
+挂在老的 `/var/lib/postgresql/data` 会被判定成「有不属于本版本的数据」。
+改成挂父目录 `/var/lib/postgresql`（docker-library/postgres#1259）。
+这条不修，**compose 根本起不来**，而错误信息读起来像是「你升级了数据库没跑 pg_upgrade」，
+很容易被误导去查别的地方。
+
+### 缺陷 2：「目标数据源不可用」的路由会永久卡在 PAUSED（真 bug，不只是容器问题）
+
+现象：容器里后端先于数据库网络就绪，首次探测失败 → 路由状态 PAUSED，
+原因写着「目标数据源不可用，等待恢复后自动拉起」，然后**永远不恢复**。
+
+根因是注释与实现不一致。`ConsumerManager#startRoute` 在探测失败时
+**不提交消费者线程**就 return，注释写着「交给 H1 的注册表对账 + 闸门恢复去重新拉起」，
+但这两条路都走不通：
+- H1 的 `reconcile()` 只在**内存版本 ≠ 库内版本**时才 refresh 注册表，它压根不碰 ConsumerManager；
+- `RouteConsumer#tryRecover` 是消费者**线程内部**的恢复逻辑 —— 消费者没被创建，
+  就没有线程去调它。
+
+于是这条路由只能靠人工重启或改一次配置才会重试。容器编排下首次启动失败几乎是必然。
+
+修法：给 `ConsumerManager` 加周期性「补差」任务
+（`mqs-pg.consumer.reconcile-interval`，默认 30s），把 ACTIVE 但没有消费者的路由
+重新尝试拉起；已存在的直接跳过，不打扰。`auto-start=false`（测试/离线模式）下不动作。
+补了 2 条测试：开关被尊重、PAUSED 能被真正拉回 RUNNING。
+**注意**：这条与容器无关，任何「首次启动时目标库暂时不可用」的场景都受影响。
+
+### 缺陷 3：健康检查里的 localhost 解析到 IPv6，容器明明是好的却 unhealthy
+
+前端容器状态一直是 `unhealthy`，但宿主机访问端口正常。容器内查证：
+`/etc/hosts` 把 `localhost` 优先映射到 `::1`，而 nginx 只听 `0.0.0.0:80`（IPv4），
+于是健康检查稳定拿到 `Connection refused`。
+
+改成写 IPv4 字面量 `127.0.0.1`。后端的 curl 检查同理一并改掉 ——
+同样的问题只是这次恰好先在前端暴露。
+
+### 缺陷 4（顺带）：demo 种子里的目标数据源是 localhost
+
+种子数据 `cfg_datasource.jdbc_url = jdbc:postgresql://localhost:5432/postgres`，
+本机直跑正确，**在容器里 localhost 指容器自己**，连接必然被拒。
+
+种子迁移是已应用的、且本机直跑仍需要 localhost，所以不碰迁移，改成运行期覆盖：
+新增可选配置 `mqs-pg.datasource.localhost-override`，建池前把 URL 的**主机位**
+换成指定主机（不碰端口/库名/参数）。compose 里设为服务名 `postgres`，
+本机直跑不设即为原行为。配 3 条单测，其中一条专门钉「库名/参数里出现
+localhost 字样时不被误伤」。
+
+### 最终验证（都是实跑，不是推断）
+
+用**仓库里真正的 `docker-compose.yml`**（仅替换宿主机端口以避开本机已占用的
+5432/8080）完整起栈：
+
+- 三个容器 `postgres` / `backend` / `frontend` 全部 **healthy**；
+- `rt_consumer_state` = `RUNNING`（修复前是永久 PAUSED）；
+- 发布一条 mock 消息 → 目标表 `biz_demo.orders` 出现对应行，
+  **中文完整**（按 UTF-8 字节核对：`e5aeb9e599a8e58c96e9aa8ce8af81` = 「容器化验证」），
+  枚举映射生效（`PAID` → `2`）；
+- 重复发布同一消息，目标表仍是 1 行（幂等 MERGE）；
+- 前端 `/` 与 SPA 回落 `/routes` 均 200；`/api/overview` 经 nginx 反代返回正常 JSON；
+- `raw_message` 1 条、`rt_error_record` 0 条；
+- 静态资源 `Cache-Control: max-age=31536000,public, immutable`；
+  `index.html` 补了 `charset utf-8`（实测不写时响应头是裸的 `text/html`）。
+
+调试过程中的一个坑记一下：早期我用 PowerShell 的 `-Body $json` 发中文，
+数据库里存成了 `3f3f3f3f3f`（问号字节）—— 那是 PowerShell 传参的编码问题，
+**不是链路问题**；改用 UTF-8 字节数组后中文完整。以后验证中文别再被这个误导。
+
+`mvn verify` **107 passed**（105 → 107：LocalhostOverrideTest 3 条 +
+ConsumerReconcileTest 2 条，其中前一轮的 105 已含 3 条 Localhost 测试），
+spotless 干净。验证用的容器、卷、临时 compose 文件已全部清理，
+本机原有的 portainer / pg-min 未受影响。
+
+### 影响与回滚
+
+- 缺陷 2 的补差任务是**行为变更**：以前卡住的 PAUSED 路由现在会自动恢复。
+  若希望保持旧行为（例如人工控制何时拉起），把 `mqs-pg.consumer.reconcile-interval`
+  设成一个很大的值即可，`auto-start=false` 时它彻底不动作。
+- 缺陷 4 的 `localhost-override` 默认空 → 默认行为与改造前**完全一致**。
+- 缺陷 1/3 只改 compose 与 Dockerfile，不影响本机直跑。
+
+---
+
 ## 2026-10-21 · 里程碑 K / L / M 收尾（K2、K4、K6–K8；L1、L2、L4–L6；M 全部覆盖）
 
 这一批里有两处「计划说要跳过、实测发现不该跳」（L4）和两处「计划要做的、
