@@ -132,16 +132,25 @@ docker compose up -d --build
 端口与单独跑时一致（前端 5173、后端 8080、PG 5432）。
 `SPRING_PROFILES_ACTIVE=dev`，所以 `/swagger-ui/index.html` 也可用。
 
-要点（都是容器里容易踩的地方）：
+要点（都是容器里容易踩的地方，**都是实跑踩到的**）：
 - 后端连 PG 用服务名 `postgres`，**不是** `localhost` —— 容器内的 localhost 是它自己；
 - 前端 nginx 反代后端用服务名 `backend`（见 `frontend/nginx.conf`），
   所以**不需要改**前端 `baseURL`；
+- demo 种子里的目标数据源写的是 `localhost:5432`（本机直跑时正确）。容器里由
+  `MQS_PG_DATASOURCE_LOCALHOST_OVERRIDE=postgres` 运行期改写主机位 ——
+  **种子迁移没有改**（已应用的迁移不动），本机直跑不设此项即为原行为；
+- postgres:18 的数据目录挂在 `/var/lib/postgresql`（父目录），
+  **不是** `/var/lib/postgresql/data`：18+ 改成 `<主版本>/` 子目录布局，
+  挂老路径会被判定为「有不属于本版本的数据」而拒绝启动；
+- 健康检查写 `127.0.0.1` 而不是 `localhost`：alpine 的 localhost 优先解析到 `::1`，
+  而 nginx 只听 IPv4，否则容器明明是好的却一直 unhealthy；
 - 数据源密码默认以 `{noop}` 明文存（未设 `MQS_PG_CRYPTO_KEY` 时打 WARN）。
   要启用加密，在仓库根目录 `.env` 写 `MQS_PG_CRYPTO_KEY=$(openssl rand -base64 32)`。
   **不要**写一句随手编的字符串：`Base64.getDecoder` 会严格校验，后端会启动失败。
 
 后端容器用 `curl` 打 `/actuator/health/liveness`（不是 readiness ——
-readiness 失败只该摘流量，重启容器没有意义）。
+readiness 失败只该摘流量，重启容器没有意义）。三个服务都带 healthcheck，
+`docker compose ps` 应全部显示 `healthy`。
 
 页面：运行总览、路由与版本、数据源、重试队列（可人工重放 / 取消）、错误与 DLQ、原始留存、模拟投递。
 
@@ -358,7 +367,7 @@ mqs-pg/
 | 8 前端（Vue 3 + Vite + Element Plus）+ 端到端联调 | ✅ |
 | 9 页面配置化：路由/数据源/目标表增删改、映射编辑、发布与回滚 | ✅ |
 | 10 优化第一轮：A 稳定性 / B 可观测性 / C 性能 / D 交付 | ✅ A1、B1–B3、C1–C3、D1–D3 已交付 |
-| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | ✅ G、H、I、J 全部交付；K 交付 K1–K4、K6–K8（K5 只做前半：抽重复水合 + 状态色收敛，拆组件留待手测条件具备时）；L 交付 L1（后端）、L2、L3、L4、L5、L6（L1 前端 lint、L2 的镜像实机构建未完成，见 evolution.md）；M1–M5 全部已有覆盖 |
+| 11 优化第二轮：G 正确性 / H 自愈 / I 校验前置 / J 性能 / K 前端 / L 工程化 / M 集成测试 | ✅ G、H、I、J 全部交付；K 交付 K1–K4、K6–K8（K5 只做前半：抽重复水合 + 状态色收敛，拆组件留待手测条件具备时）；L 交付 L1（后端）、L2（镜像与 `docker compose up` 已实机验证）、L3–L6（L1 前端 lint 未接入，见 evolution.md）；M1–M5 全部已有覆盖 |
 
 阶段 0–8 的验证结果见 tech-design.md 附录 E，阶段 9 见附录 F。
 
