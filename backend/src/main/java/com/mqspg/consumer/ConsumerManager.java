@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -82,6 +83,39 @@ public class ConsumerManager {
                 continue;
             }
             startRoute(route);
+        }
+    }
+
+    /**
+     * 周期性补齐消费者（G3 后续修正）。
+     *
+     * <p><b>为什么必须有这个定时任务</b>：{@link #startRoute} 在「目标数据源不可用」时
+     * 会把状态置为 PAUSED 并直接 return，**不提交消费者线程**。原注释写着
+     * 「交给 H1 的注册表对账 + 闸门恢复去重新拉起」，但这两条路都走不通：
+     * <ul>
+     *   <li>H1 的 {@code reconcile()} 只在<b>内存版本与库内版本不一致</b>时才 refresh
+     *       注册表，它压根不碰 ConsumerManager；</li>
+     *   <li>{@code RouteConsumer#tryRecover} 是消费者<b>线程内部</b>的恢复逻辑 ——
+     *       可消费者根本没被创建，就没有线程去调它。</li>
+     * </ul>
+     * 结果是这类路由会**永久卡在 PAUSED**，只有人工重启或改一次配置才会重试。
+     * 容器编排下这几乎是必然事件：后端可能先于数据库/网络就绪，首次探测失败，
+     * 然后整条链路一直不工作，而页面只显示「等待恢复后自动拉起」—— 等多久都不会恢复。
+     *
+     * <p>这里只是「补差」：已经存在的消费者直接跳过，不打扰；成本是一次
+     * {@code SELECT ... WHERE status='ACTIVE'}，间隔默认 30s。
+     */
+    @Scheduled(fixedDelayString = "${mqs-pg.consumer.reconcile-interval:30s}")
+    public void reconcileConsumers() {
+        if (!autoStart) {
+            // auto-start=false 是测试/离线模式，此时不该有后台线程主动拉消费者
+            return;
+        }
+        try {
+            refresh();
+        } catch (RuntimeException e) {
+            // 库暂时不可用：不要刷屏，也不要让定时任务本身挂掉
+            log.warn("消费者补齐跳过: {}", e.getMessage());
         }
     }
 
@@ -199,6 +233,18 @@ public class ConsumerManager {
 
     public RouteConsumer consumerOf(long routeId) {
         return consumers.get(routeId);
+    }
+
+    /**
+     * 仅供测试：临时切换 auto-start 开关。
+     *
+     * <p>集成测试基类为了不干扰断言把 auto-start 设为 false，但要么验证
+     * 「补差任务确实会拉起 PAUSED 路由」，要么就得在不关它的前提下起整个上下文 ——
+     * 那样后台消费者会跟断言抢消息，测试变得时好时坏。
+     * 与其为这一个场景复制一整套配置，不如开一个显式的测试入口。
+     */
+    void setAutoStartForTest(boolean value) {
+        this.autoStart = value;
     }
 
     public Map<Long, RouteConsumer> consumers() {
